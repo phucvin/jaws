@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebAssembly Test with GC</title>
+</head>
+<body>
+    <h1>WebAssembly Test with GC</h1>
+    <div id="output"></div>
+
+    <script>
+        const output = document.getElementById('output');
+        const tagToImport = new WebAssembly.Tag({ parameters: ["i32", "i64"] });
+
+        // Function to log messages to the page
+        function log(message) {
+            output.innerHTML += message + '<br>';
+        }
+
+        const importObject = {
+          m: {
+            t: tagToImport,
+          },
+
+          console: { log: (value) => log(`WebAssembly log: ${value}`) }
+        };
+
+        (async function() {
+        // Load and instantiate the WebAssembly module
+        // let response = await fetch('tests/ref-cast.wasm');
+        let response = await fetch('wasm/generated.wasm');
+        let bytes = await response.arrayBuffer();
+        let compiled = await WebAssembly.compile(bytes, { builtins: ['js-string'] });
+        let instance = await WebAssembly.instantiate(compiled, importObject)
+        const exports = instance.exports;
+        //     
+        // // Call the start function
+        console.log(exports.init());
+        //
+        log("Start function called. Check the WebAssembly log above for the result.");
+        // }).catch(error => {
+        //   debugger
+        //     log('Error: ' + error);
+        // });
+        })();
+    </script>
+</body>
+</html>

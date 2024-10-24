@@ -1,0 +1,13 @@
+[package]
+name = "js2wasm"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+boa_ast = "0.19"
+boa_parser = "0.19"
+walrus = "0.22"
+boa_interner = "0.19"
+rand = "0.8.5"
