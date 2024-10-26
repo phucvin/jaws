@@ -20,43 +20,43 @@
 
 
 (module
-  (import "wasm:js-string" "encodeStringToMemoryUTF16" (func (param i32)))
-  (type $char-array (array (mut i16)))
+;;  (import "wasm:js-string" "encodeStringToMemoryUTF16" (func (param i32)))
+ ;; (type $char-array (array (mut i16)))
 
-  (import "wasm:js-string" "fromCharCodeArray" 
-    (func $fromCharCodeArray 
-      (param $str (ref null $char-array)) 
-      (param $start i32)
-      (param $end i32)
-      (result (ref extern))
-    )
-  )
+;;  (import "wasm:js-string" "fromCharCodeArray" 
+;;    (func $fromCharCodeArray 
+;;      (param $str (ref null $char-array)) 
+;;      (param $start i32)
+;;      (param $end i32)
+;;      (result (ref extern))
+;;    )
+;;  )
 
 ;;  (global $hey stringref (string.const "Hey"))
-  (import "console" "log" (func $log (param i32)))
-  (type (func (param i32 i64)))
+  ;;(import "console" "log" (func $log (param i32)))
+  (type (func (param anyref)))
   (type (func (param i32)))
-  (tag (import "m" "t") (type 0))
+  ;;(tag (import "m" "t") (type 0))
+  (tag $exn (type 0))
   (tag (type 1))
   (func $check-throw
-    i32.const 1
-    i64.const 2
+    ref.null any
     throw 0
   )
   ;; Define a function that takes an externref and tries to cast it to $custom_type
   (func $check-try-catch-rethrow
-    try (result i32 i64)
+    try
       call $check-throw
       unreachable
     catch 0
       ;; the exception arguments are on the stack at this point
+      drop
     catch 1
-      i64.const 2
+      drop
+      ;;i64.const 2
     catch_all
       rethrow 0
     end
-    drop
-    drop
   )
   (func $try-with-params
     i32.const 0
@@ -68,7 +68,7 @@
     catch 1
       i64.const 2
     catch_all
-      (call $log (i32.const 888))
+      ;;(call $log (i32.const 888))
       i32.const 0
       i64.const 2
     end
@@ -83,7 +83,7 @@
     end
   )
 
-  (func (export "start")
+  (func (export "_start")
     call $try-with-params
   )
 )

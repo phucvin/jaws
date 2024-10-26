@@ -11,3 +11,5 @@ boa_parser = "0.19"
 walrus = "0.22"
 boa_interner = "0.19"
 rand = "0.8.5"
+tinytemplate = "1.1"
+serde = { version = "1.0", features = ["derive"] }

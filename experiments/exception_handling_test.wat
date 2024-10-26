@@ -7,7 +7,7 @@
   (func $catch_exn (result i32)
     (try_table (result i32)
         i32.const 42
-        call $throw_exn
+        call $throw_ref_example
         i32.const 0  ;; This won't be reached
       (catch $exn
         drop  ;; Drop the caught exception value

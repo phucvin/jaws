@@ -18,25 +18,48 @@
             output.innerHTML += message + '<br>';
         }
 
+        let instance;
         const importObject = {
           m: {
             t: tagToImport,
           },
 
-          console: { log: (value) => log(`WebAssembly log: ${value}`) }
+          console: { log: (value) => log(`WebAssembly log: ${value}`) },
+          "wasi_snapshot_preview1": {
+            fd_write(fd, iovsPtr, iovsLength, bytesWrittenPtr){
+    const iovs = new Uint32Array(instance.exports.memory.buffer, iovsPtr, iovsLength * 2);
+    if(fd === 1) { //stdout
+        let text = "";
+        let totalBytesWritten = 0;
+        const decoder = new TextDecoder();
+        for(let i =0; i < iovsLength * 2; i += 2){
+            const offset = iovs[i];
+            const length = iovs[i+1];
+            const textChunk = decoder.decode(new Int8Array(instance.exports.memory.buffer, offset, length));
+            text += textChunk;
+            totalBytesWritten += length;
+        }
+        const dataView = new DataView(instance.exports.memory.buffer);
+        dataView.setInt32(bytesWrittenPtr, totalBytesWritten, true);
+        console.log(text);
+    }
+    return 0;
+            }}
         };
 
         (async function() {
         // Load and instantiate the WebAssembly module
         // let response = await fetch('tests/ref-cast.wasm');
-        let response = await fetch('wasm/generated.wasm');
+        let response = await fetch('wasm/exception_handling.wasm');
         let bytes = await response.arrayBuffer();
         let compiled = await WebAssembly.compile(bytes, { builtins: ['js-string'] });
-        let instance = await WebAssembly.instantiate(compiled, importObject)
+        instance = await WebAssembly.instantiate(compiled, importObject)
         const exports = instance.exports;
         //     
         // // Call the start function
-        console.log(exports.init());
+        console.time('start');
+        console.log(exports._start());
+        console.timeEnd('start');
         //
         log("Start function called. Check the WebAssembly log above for the result.");
         // }).catch(error => {
