@@ -1,9 +1,12 @@
 (module
+  (type (func (param anyref)))
   (type $write_type (func (param i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_write" (func $write (type $write_type)))
 
   ;; 64KB
   (memory (export "memory") 1)
+
+  (tag $exception (type 0))
 
   (global $free_memory_offset i32 (i32.const {free_memory_offset}))
 
@@ -47,6 +50,7 @@
   (type $JSFunc
     (func 
       (param $scope (ref $Scope))
+      (param $this anyref)
       (param $arguments (ref null $JSArgs))
       (result anyref)
     )
@@ -59,6 +63,7 @@
 
   (type $Object (struct
     (field $properties (mut (ref $HashMap)))
+    (field $prototype (mut anyref))
   ))
 
   (type $Number (struct (field (mut f64))))
@@ -67,6 +72,13 @@
     (struct.new $HashMap
       (array.new $EntriesArray (ref.null $HashMapEntry) (i32.const 10))
       (i32.const 0)
+    )
+  )
+
+  (func $new_object (result (ref $Object))
+    (struct.new $Object
+      (call $new_hashmap)
+      (ref.null any)
     )
   )
 
@@ -272,7 +284,7 @@
     (ref.null any)
   )
 
-  (func $call_function (param $scope (ref $Scope)) (param $func anyref) (param $arguments (ref null $JSArgs)) (result anyref)
+  (func $call_function (param $scope (ref $Scope)) (param $func anyref) (param $this anyref) (param $arguments (ref null $JSArgs)) (result anyref)
     (local $function (ref $Function))
     (local $js_func (ref $JSFunc))
 
@@ -281,6 +293,7 @@
 
     (call_ref $JSFunc
       (struct.get $Function $scope (local.get $function))
+      (local.get $this)
       (local.get $arguments)
       (local.get $js_func)
     )

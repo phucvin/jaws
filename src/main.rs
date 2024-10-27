@@ -8,10 +8,10 @@ use boa_ast::{
             update::UpdateTarget,
             Assign, Binary, Unary, Update,
         },
-        Call, Expression, Identifier,
+        Call, Expression, Identifier, New,
     },
-    function::{Function, FormalParameterList, FunctionBody, ArrowFunction},
-    statement::{Block, If, Return, Statement, WhileLoop, Throw},
+    function::{ArrowFunction, FormalParameterList, Function, FunctionBody},
+    statement::{Block, If, Return, Statement, Throw, WhileLoop},
     visitor::{VisitWith, Visitor},
     StatementListItem,
 };
@@ -93,9 +93,13 @@ impl WasmTranslator {
         WatInstruction::list(instructions)
     }
 
-    fn translate_function_generic(&mut self, name: Option<Identifier>, params: &FormalParameterList, body: &FunctionBody) -> Box<WatInstruction> {
-         let function_name =
-            gen_function_name(name.map(|i| i.to_interned_string(&self.interner)));
+    fn translate_function_generic(
+        &mut self,
+        name: Option<Identifier>,
+        params: &FormalParameterList,
+        body: &FunctionBody,
+    ) -> Box<WatInstruction> {
+        let function_name = gen_function_name(name.map(|i| i.to_interned_string(&self.interner)));
         let wat_function = WatFunction::new(function_name.clone());
         self.enter_function(wat_function);
 
@@ -181,7 +185,7 @@ impl WasmTranslator {
                     name: function_name,
                 }),
             ],
-        })       
+        })
     }
 
     fn translate_function(&mut self, fun: &Function) -> Box<WatInstruction> {
@@ -313,20 +317,15 @@ impl WasmTranslator {
             instructions.push(WatInstruction::local_set("$function"));
 
             // Call the function
-            instructions.push(Box::new(WatInstruction::Call {
-                name: "$call_function".to_string(),
-                args: vec![
-                    Box::new(WatInstruction::LocalGet {
-                        name: "$scope".to_string(),
-                    }),
-                    Box::new(WatInstruction::LocalGet {
-                        name: "$function".to_string(),
-                    }),
-                    Box::new(WatInstruction::LocalGet {
-                        name: "$call_arguments".to_string(),
-                    }),
+            instructions.push(WatInstruction::call(
+                "$call_function",
+                vec![
+                    WatInstruction::local_get("$scope"),
+                    WatInstruction::local_get("$function"),
+                    WatInstruction::ref_null("any"),
+                    WatInstruction::local_get("$call_arguments"),
                 ],
-            }));
+            ));
         }
 
         Box::new(WatInstruction::List { instructions })
@@ -484,7 +483,9 @@ impl WasmTranslator {
             Expression::ObjectLiteral(_object_literal) => todo!(),
             Expression::Spread(_spread) => todo!(),
             Expression::Function(function) => self.translate_function(function),
-            Expression::ArrowFunction(arrow_function) => self.translate_arrow_function(arrow_function),
+            Expression::ArrowFunction(arrow_function) => {
+                self.translate_arrow_function(arrow_function)
+            }
             Expression::AsyncArrowFunction(_async_arrow_function) => todo!(),
             Expression::Generator(_generator) => todo!(),
             Expression::AsyncFunction(_async_function) => todo!(),
@@ -494,7 +495,7 @@ impl WasmTranslator {
             Expression::PropertyAccess(property_access) => {
                 self.translate_property_access(property_access)
             }
-            Expression::New(_) => todo!(),
+            Expression::New(new) => self.translate_new(new),
             Expression::Call(call) => self.translate_call(call),
             Expression::SuperCall(_super_call) => todo!(),
             Expression::ImportCall(_import_call) => todo!(),
@@ -513,6 +514,10 @@ impl WasmTranslator {
             Expression::Parenthesized(_parenthesized) => todo!(),
             _ => todo!(),
         }
+    }
+
+    fn translate_new(&mut self, new: &New) -> Box<WatInstruction> {
+        WatInstruction::empty()
     }
 
     fn translate_arrow_function(&mut self, function: &ArrowFunction) -> Box<WatInstruction> {
@@ -689,7 +694,7 @@ impl WasmTranslator {
     }
 
     fn translate_statement(&mut self, statement: &Statement) -> Box<WatInstruction> {
-        let instruction = match statement {
+        match statement {
             Statement::Block(block) => self.translate_block(block),
             Statement::Var(var_declaration) => self.translate_let(var_declaration),
             Statement::Empty => todo!(),
@@ -708,12 +713,12 @@ impl WasmTranslator {
             Statement::Throw(throw) => self.translate_throw(throw),
             Statement::Try(_) => todo!(),
             Statement::With(_with) => todo!(),
-        };
-        instruction
+        }
     }
 
     fn translate_throw(&mut self, throw: &Throw) -> Box<WatInstruction> {
-        todo!()
+        let target = self.translate_expression(throw.target());
+        WatInstruction::list(vec![target, WatInstruction::throw("$exception")])
     }
 
     fn translate_if_statement(&mut self, if_statement: &If) -> Box<WatInstruction> {
@@ -723,8 +728,10 @@ impl WasmTranslator {
             WatInstruction::r#if(
                 None,
                 vec![self.translate_statement(if_statement.body())],
-                if_statement.else_node().map(|e| vec![self.translate_statement(e)]),
-            )
+                if_statement
+                    .else_node()
+                    .map(|e| vec![self.translate_statement(e)]),
+            ),
         ])
     }
 

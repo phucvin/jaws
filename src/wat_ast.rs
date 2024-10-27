@@ -1,41 +1,90 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{self, write};
 
+use boa_ast::statement::LabelledItem;
+
 #[derive(Debug, Clone)]
 pub enum WatInstruction {
-    Local { name: String, type_: String },
-    GlobalGet { name: String },
-    LocalGet { name: String },
-    LocalSet { name: String },
-    Call { name: String, args: Vec<Box<WatInstruction>> },
-    I32Const { value: i32 },
+    Local {
+        name: String,
+        type_: String,
+    },
+    GlobalGet {
+        name: String,
+    },
+    LocalGet {
+        name: String,
+    },
+    LocalSet {
+        name: String,
+    },
+    Call {
+        name: String,
+        args: Vec<Box<WatInstruction>>,
+    },
+    I32Const {
+        value: i32,
+    },
     I32Eqz,
-    F64Const { value: f64 },
-    StructNew { name: String },
-    ArrayNew { name: String, init: Box<WatInstruction>, length: Box<WatInstruction> },
-    RefNull { type_: String },
+    F64Const {
+        value: f64,
+    },
+    StructNew {
+        name: String,
+    },
+    ArrayNew {
+        name: String,
+        init: Box<WatInstruction>,
+        length: Box<WatInstruction>,
+    },
+    RefNull {
+        type_: String,
+    },
     Ref(String),
-    RefFunc { name: String },
-    Type { name: String },
+    RefFunc {
+        name: String,
+    },
+    Type {
+        name: String,
+    },
     Return,
-    Block { label: String, instructions: Vec<Box<WatInstruction>> },
-    Loop { label: String, instructions: Vec<Box<WatInstruction>> },
-    If { condition: Option<Box<WatInstruction>>, then: Vec<Box<WatInstruction>>, r#else: Option<Vec<Box<WatInstruction>>> },
+    Block {
+        label: String,
+        instructions: Vec<Box<WatInstruction>>,
+    },
+    Loop {
+        label: String,
+        instructions: Vec<Box<WatInstruction>>,
+    },
+    If {
+        condition: Option<Box<WatInstruction>>,
+        then: Vec<Box<WatInstruction>>,
+        r#else: Option<Vec<Box<WatInstruction>>>,
+    },
     BrIf(String),
     Br(String),
-    Instruction { name: String, args: Vec<Box<WatInstruction>> },
+    Instruction {
+        name: String,
+        args: Vec<Box<WatInstruction>>,
+    },
     Empty,
-    List { instructions: Vec<Box<WatInstruction>> },
+    List {
+        instructions: Vec<Box<WatInstruction>>,
+    },
     Log,
     Identifier(String),
     Drop,
     LocalTee(String),
     RefI31(Box<WatInstruction>),
+    Throw(String),
 }
 
 impl WatInstruction {
     pub fn local(name: impl Into<String>, type_: impl Into<String>) -> Box<Self> {
-        Box::new(Self::Local { name: name.into(), type_: type_.into() })
+        Box::new(Self::Local {
+            name: name.into(),
+            type_: type_.into(),
+        })
     }
 
     pub fn global_get(name: impl Into<String>) -> Box<Self> {
@@ -55,7 +104,10 @@ impl WatInstruction {
     }
 
     pub fn call(name: impl Into<String>, args: Vec<Box<WatInstruction>>) -> Box<Self> {
-        Box::new(Self::Call { name: name.into(), args })
+        Box::new(Self::Call {
+            name: name.into(),
+            args,
+        })
     }
 
     pub fn i32_const(value: i32) -> Box<Self> {
@@ -70,12 +122,22 @@ impl WatInstruction {
         Box::new(Self::StructNew { name: name.into() })
     }
 
-    pub fn array_new(name: impl Into<String>, init: Box<WatInstruction>, length: Box<WatInstruction>) -> Box<Self> {
-        Box::new(Self::ArrayNew { name: name.into(), init, length })
+    pub fn array_new(
+        name: impl Into<String>,
+        init: Box<WatInstruction>,
+        length: Box<WatInstruction>,
+    ) -> Box<Self> {
+        Box::new(Self::ArrayNew {
+            name: name.into(),
+            init,
+            length,
+        })
     }
 
     pub fn ref_null(type_: impl Into<String>) -> Box<Self> {
-        Box::new(Self::RefNull { type_: type_.into() })
+        Box::new(Self::RefNull {
+            type_: type_.into(),
+        })
     }
 
     pub fn ref_func(name: impl Into<String>) -> Box<Self> {
@@ -91,15 +153,29 @@ impl WatInstruction {
     }
 
     pub fn block(label: String, instructions: Vec<Box<WatInstruction>>) -> Box<Self> {
-        Box::new(Self::Block { label, instructions })
+        Box::new(Self::Block {
+            label,
+            instructions,
+        })
     }
 
     pub fn r#loop(label: String, instructions: Vec<Box<WatInstruction>>) -> Box<Self> {
-        Box::new(Self::Loop { label, instructions })
+        Box::new(Self::Loop {
+            label,
+            instructions,
+        })
     }
 
-    pub fn r#if(condition: Option<Box<WatInstruction>>, then: Vec<Box<WatInstruction>>, r#else: Option<Vec<Box<WatInstruction>>>) -> Box<Self> {
-        Box::new(Self::If { condition, then, r#else })
+    pub fn r#if(
+        condition: Option<Box<WatInstruction>>,
+        then: Vec<Box<WatInstruction>>,
+        r#else: Option<Vec<Box<WatInstruction>>>,
+    ) -> Box<Self> {
+        Box::new(Self::If {
+            condition,
+            then,
+            r#else,
+        })
     }
 
     pub fn br_if(label: impl Into<String>) -> Box<Self> {
@@ -111,7 +187,10 @@ impl WatInstruction {
     }
 
     pub fn instruction(name: impl Into<String>, args: Vec<Box<WatInstruction>>) -> Box<Self> {
-        Box::new(Self::Instruction { name: name.into(), args })
+        Box::new(Self::Instruction {
+            name: name.into(),
+            args,
+        })
     }
 
     pub fn empty() -> Box<Self> {
@@ -133,6 +212,10 @@ impl WatInstruction {
     pub fn ref_i31(instruction: Box<WatInstruction>) -> Box<Self> {
         Box::new(Self::RefI31(instruction))
     }
+
+    pub fn throw(label: impl Into<String>) -> Box<Self> {
+        Box::new(Self::Throw(label.into()))
+    }
 }
 
 impl fmt::Display for WatInstruction {
@@ -148,29 +231,41 @@ impl fmt::Display for WatInstruction {
                     write!(f, " {}", arg)?;
                 }
                 write!(f, ")")
-            },
+            }
             WatInstruction::I32Const { value } => write!(f, "(i32.const {})", value),
             WatInstruction::F64Const { value } => write!(f, "(f64.const {})", value),
             WatInstruction::StructNew { name } => write!(f, "(struct.new {})", name),
-            WatInstruction::ArrayNew { name, init, length } => write!(f, "(array.new {} {} {})", name, init, length),
+            WatInstruction::ArrayNew { name, init, length } => {
+                write!(f, "(array.new {} {} {})", name, init, length)
+            }
             WatInstruction::RefNull { type_ } => write!(f, "(ref.null {})", type_),
             WatInstruction::RefFunc { name } => write!(f, "(ref.func ${})", name),
             WatInstruction::Return => write!(f, "return"),
-            WatInstruction::Block { label, instructions } => {
+            WatInstruction::Block {
+                label,
+                instructions,
+            } => {
                 writeln!(f, "(block {label}")?;
                 for instruction in instructions {
                     writeln!(f, "  {}", instruction)?;
                 }
                 write!(f, ")")
-            },
-            WatInstruction::Loop { label, instructions } => {
+            }
+            WatInstruction::Loop {
+                label,
+                instructions,
+            } => {
                 writeln!(f, "(loop {label}")?;
                 for instruction in instructions {
                     writeln!(f, "  {}", instruction)?;
                 }
                 write!(f, ")")
-            },
-            WatInstruction::If { condition, then, r#else } => {
+            }
+            WatInstruction::If {
+                condition,
+                then,
+                r#else,
+            } => {
                 let condition = if let Some(c) = condition {
                     format!("{c}")
                 } else {
@@ -189,7 +284,7 @@ impl fmt::Display for WatInstruction {
                     write!(f, ")")?;
                 }
                 write!(f, ")")
-            },
+            }
             WatInstruction::BrIf(label) => write!(f, "(br_if {})", label),
             WatInstruction::Br(label) => write!(f, "(br {})", label),
             WatInstruction::Instruction { name, args } => {
@@ -198,7 +293,7 @@ impl fmt::Display for WatInstruction {
                     write!(f, " {}", arg)?;
                 }
                 write!(f, ")")
-            },
+            }
             WatInstruction::Type { name } => write!(f, "${}", name),
             WatInstruction::Empty => Ok(()),
             WatInstruction::List { instructions } => {
@@ -206,16 +301,17 @@ impl fmt::Display for WatInstruction {
                     writeln!(f, "  {}", instruction)?;
                 }
                 Ok(())
-            },
+            }
             WatInstruction::Log => {
                 writeln!(f, "(call $log)")
-            },
+            }
             WatInstruction::Identifier(s) => write!(f, "{}", s),
             WatInstruction::Ref(s) => write!(f, "(ref ${})", s),
             WatInstruction::Drop => writeln!(f, "(drop)"),
             WatInstruction::LocalTee(name) => write!(f, "(local.set {})", name),
             WatInstruction::I32Eqz => write!(f, "(i32.eqz)"),
             WatInstruction::RefI31(instruction) => write!(f, "(ref.i31 {instruction})"),
+            WatInstruction::Throw(label) => write!(f, "(throw {label})"),
         }
     }
 }

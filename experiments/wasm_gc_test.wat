@@ -41,7 +41,7 @@
   (tag (type 1))
   (func $check-throw
     ref.null any
-    throw 0
+    throw $exn
   )
   ;; Define a function that takes an externref and tries to cast it to $custom_type
   (func $check-try-catch-rethrow
