@@ -148,7 +148,7 @@ impl WatInstruction {
         Box::new(Self::Type { name: name.into() })
     }
 
-    pub fn return_() -> Box<Self> {
+    pub fn r#return() -> Box<Self> {
         Box::new(Self::Return)
     }
 
@@ -215,6 +215,10 @@ impl WatInstruction {
 
     pub fn throw(label: impl Into<String>) -> Box<Self> {
         Box::new(Self::Throw(label.into()))
+    }
+
+    pub fn r#type(name: impl Into<String>) -> Box<Self> {
+        Box::new(Self::Type { name: name.into() })
     }
 }
 
@@ -294,11 +298,11 @@ impl fmt::Display for WatInstruction {
                 }
                 write!(f, ")")
             }
-            WatInstruction::Type { name } => write!(f, "${}", name),
+            WatInstruction::Type { name } => write!(f, "{}", name),
             WatInstruction::Empty => Ok(()),
             WatInstruction::List { instructions } => {
                 for instruction in instructions {
-                    writeln!(f, "  {}", instruction)?;
+                    writeln!(f, "{}", instruction)?;
                 }
                 Ok(())
             }
@@ -308,7 +312,7 @@ impl fmt::Display for WatInstruction {
             WatInstruction::Identifier(s) => write!(f, "{}", s),
             WatInstruction::Ref(s) => write!(f, "(ref ${})", s),
             WatInstruction::Drop => writeln!(f, "(drop)"),
-            WatInstruction::LocalTee(name) => write!(f, "(local.set {})", name),
+            WatInstruction::LocalTee(name) => write!(f, "(local.tee {})", name),
             WatInstruction::I32Eqz => write!(f, "(i32.eqz)"),
             WatInstruction::RefI31(instruction) => write!(f, "(ref.i31 {instruction})"),
             WatInstruction::Throw(label) => write!(f, "(throw {label})"),
@@ -344,12 +348,12 @@ impl WatFunction {
         self.results.push(type_);
     }
 
-    pub fn add_local(&mut self, name: String, type_: String) {
-        self.locals.insert((name, type_));
+    pub fn add_local(&mut self, name: impl Into<String>, r#type: impl Into<String>) {
+        self.locals.insert((name.into(), r#type.into()));
     }
 
-    pub fn add_instruction(&mut self, instruction: WatInstruction) {
-        self.body.push_back(Box::new(instruction));
+    pub fn add_instruction(&mut self, instruction: Box<WatInstruction>) {
+        self.body.push_back(instruction);
     }
 }
 
@@ -380,6 +384,7 @@ pub struct WatModule {
     pub functions: Vec<WatFunction>,
     pub exports: Vec<(String, String)>,
     pub globals: Vec<(String, String, WatInstruction)>,
+    pub identifiers: HashMap<usize, String>,
 }
 
 impl WatModule {
@@ -390,6 +395,7 @@ impl WatModule {
             functions: Vec::new(),
             exports: Vec::new(),
             globals: Vec::new(),
+            identifiers: HashMap::new(),
         }
     }
 
@@ -399,6 +405,10 @@ impl WatModule {
 
     pub fn get_function_mut(&mut self, name: &str) -> Option<&mut WatFunction> {
         self.functions.iter_mut().find(|f| f.name == name)
+    }
+
+    pub fn add_identifier(&mut self, identifier: usize, value: impl Into<String>) {
+        self.identifiers.insert(identifier, value.into());
     }
 }
 

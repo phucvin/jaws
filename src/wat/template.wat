@@ -191,6 +191,36 @@
     (return (ref.null any))
   )
 
+  (func $get_property (param $target anyref) (param $name i32) (result anyref)
+    ;; for now we just support $Object for properties
+    (if (ref.test (ref $Object) (local.get $target))
+      (then
+        (call $hashmap_get
+          (struct.get $Object $properties (ref.cast (ref $Object) (local.get $target)))
+          (local.get $name)
+        )
+        (return)
+      )
+    )
+
+    (throw $exception (ref.i31 (i32.const 100)))
+  )
+
+  (func $set_property (param $target anyref) (param $name i32) (param $value anyref)
+    ;; for now we just support $Object for properties
+    (if (ref.test (ref $Object) (local.get $target))
+      (then
+        (call $hashmap_set
+          (struct.get $Object $properties (ref.cast (ref $Object) (local.get $target)))
+          (local.get $name)
+          (local.get $value)
+        )
+        (return)
+      )
+    )
+
+    (throw $exception (ref.i31 (i32.const 100)))
+  )
 
   (func $hashmap_set (param $map (ref $HashMap)) (param $key i32) (param $value anyref)
     (local $entries (ref $EntriesArray))
