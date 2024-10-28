@@ -27,7 +27,7 @@ use std::{
 
 mod wat_ast;
 mod wat_template;
-use wat_ast::{WatFunction, WatInstruction, WatModule};
+use wat_ast::{WatFunction, WatInstruction as W, WatModule};
 
 fn gen_function_name(s: Option<String>) -> String {
     let r: String = rand::thread_rng()
@@ -118,16 +118,16 @@ impl WasmTranslator {
         format!("$block-{}", self.current_block_number)
     }
 
-    fn translate_return(&mut self, ret: &Return) -> Box<WatInstruction> {
+    fn translate_return(&mut self, ret: &Return) -> Box<W> {
         // println!("Return: {ret:#?}");
         let mut instructions = Vec::new();
         if let Some(target) = ret.target() {
             instructions.push(self.translate_expression(target));
         } else {
-            instructions.push(WatInstruction::ref_null("any"));
+            instructions.push(W::ref_null("any"));
         }
-        instructions.push(WatInstruction::r#return());
-        WatInstruction::list(instructions)
+        instructions.push(W::r#return());
+        W::list(instructions)
     }
 
     fn translate_function_generic(
@@ -135,7 +135,7 @@ impl WasmTranslator {
         name: Option<Identifier>,
         params: &FormalParameterList,
         body: &FunctionBody,
-    ) -> Box<WatInstruction> {
+    ) -> Box<W> {
         let function_name = gen_function_name(name.map(|i| i.to_interned_string(&self.interner)));
         let wat_function = WatFunction::new(function_name.clone());
         self.enter_function(wat_function);
@@ -152,34 +152,30 @@ impl WasmTranslator {
             .locals
             .insert(("$scope".to_string(), "(ref $Scope)".to_string()));
         self.current_function()
-            .add_instruction(WatInstruction::call(
-                "$new_scope",
-                vec![WatInstruction::local_get("$parentScope")],
-            ));
+            .add_instruction(W::call("$new_scope", vec![W::local_get("$parentScope")]));
         self.current_function()
-            .add_instruction(WatInstruction::local_set("$scope"));
+            .add_instruction(W::local_set("$scope"));
 
         // set parameters on the scope
         for (i, param) in params.as_ref().iter().enumerate() {
             match param.variable().binding() {
                 boa_ast::declaration::Binding::Identifier(identifier) => {
                     let offset = self.add_identifier(identifier);
-                    self.current_function()
-                        .add_instruction(WatInstruction::call(
-                            "$set_variable",
-                            vec![
-                                WatInstruction::local_get("$scope"),
-                                WatInstruction::i32_const(offset),
-                                WatInstruction::instruction(
-                                    "array.get",
-                                    vec![
-                                        WatInstruction::r#type("$JSArgs"),
-                                        WatInstruction::local_get("$arguments"),
-                                        WatInstruction::i32_const(i as i32),
-                                    ],
-                                ),
-                            ],
-                        ));
+                    self.current_function().add_instruction(W::call(
+                        "$set_variable",
+                        vec![
+                            W::local_get("$scope"),
+                            W::i32_const(offset),
+                            W::instruction(
+                                "array.get",
+                                vec![
+                                    W::r#type("$JSArgs"),
+                                    W::local_get("$arguments"),
+                                    W::i32_const(i as i32),
+                                ],
+                            ),
+                        ],
+                    ));
                 }
                 boa_ast::declaration::Binding::Pattern(_pattern) => todo!(),
             }
@@ -202,23 +198,17 @@ impl WasmTranslator {
         // has to return a value. If we already returned this will get ignored
         // If not, ie. there is no return statement, we will return undefined
         self.current_function()
-            .add_instruction(WatInstruction::list(vec![
-                WatInstruction::ref_null("any"),
-                WatInstruction::r#return(),
-            ]));
+            .add_instruction(W::list(vec![W::ref_null("any"), W::r#return()]));
 
         self.exit_function();
 
-        WatInstruction::call(
+        W::call(
             "$new_function".to_string(),
-            vec![
-                WatInstruction::local_get("$scope"),
-                WatInstruction::ref_func(function_name),
-            ],
+            vec![W::local_get("$scope"), W::ref_func(function_name)],
         )
     }
 
-    fn translate_function(&mut self, fun: &Function) -> Box<WatInstruction> {
+    fn translate_function(&mut self, fun: &Function) -> Box<W> {
         // println!(
         //     "translate function: {}",
         //     fun.to_interned_string(&self.interner)
@@ -227,7 +217,7 @@ impl WasmTranslator {
         self.translate_function_generic(fun.name(), fun.parameters(), fun.body())
     }
 
-    fn translate_lexical(&mut self, decl: &LexicalDeclaration) -> Box<WatInstruction> {
+    fn translate_lexical(&mut self, decl: &LexicalDeclaration) -> Box<W> {
         // println!(
         //     "translate lexical {}",
         //     decl.to_interned_string(&self.interner)
@@ -238,7 +228,7 @@ impl WasmTranslator {
         }
     }
 
-    fn translate_let(&mut self, decl: &VarDeclaration) -> Box<WatInstruction> {
+    fn translate_let(&mut self, decl: &VarDeclaration) -> Box<W> {
         //println!("LET: {:#?}", decl.0);
         // TODO: variables behave a bit differently when it comes to hoisting
         // for now I just ignore it, but it should be fixed
@@ -246,11 +236,7 @@ impl WasmTranslator {
         self.translate_let_vars(&decl.0)
     }
 
-    fn translate_call(
-        &mut self,
-        call: &Call,
-        get_this: Box<WatInstruction>,
-    ) -> Box<WatInstruction> {
+    fn translate_call(&mut self, call: &Call, get_this: Box<W>) -> Box<W> {
         // println!(
         //     "translate_call {}",
         //     call.function().to_interned_string(&self.interner)
@@ -265,35 +251,35 @@ impl WasmTranslator {
 
         // Create the arguments array
         let args_count = call.args().len() as i32;
-        instructions.push(WatInstruction::array_new(
+        instructions.push(W::array_new(
             "$JSArgs",
-            WatInstruction::ref_null("any"),
-            WatInstruction::i32_const(args_count),
+            W::ref_null("any"),
+            W::i32_const(args_count),
         ));
-        instructions.push(WatInstruction::local_set("$call_arguments"));
+        instructions.push(W::local_set("$call_arguments"));
 
         // Populate the arguments array
         for (index, arg) in call.args().iter().enumerate() {
             let arg_instruction = self.translate_expression(arg);
-            instructions.push(WatInstruction::list(vec![
+            instructions.push(W::list(vec![
                 arg_instruction,
-                WatInstruction::local_set("$temp_arg"),
-                WatInstruction::instruction(
+                W::local_set("$temp_arg"),
+                W::instruction(
                     "array.set",
                     vec![
-                        WatInstruction::r#type("$JSArgs"),
-                        WatInstruction::local_get("$call_arguments"),
-                        WatInstruction::i32_const(index as i32),
-                        WatInstruction::local_get("$temp_arg"),
+                        W::r#type("$JSArgs"),
+                        W::local_get("$call_arguments"),
+                        W::i32_const(index as i32),
+                        W::local_get("$temp_arg"),
                     ],
                 ),
             ]));
         }
 
         if function_name == "console.log" {
-            instructions.push(WatInstruction::call(
+            instructions.push(W::call(
                 "$log",
-                vec![WatInstruction::local_get("$call_arguments".to_string())],
+                vec![W::local_get("$call_arguments".to_string())],
             ));
         } else {
             // Translate the function expression
@@ -301,24 +287,24 @@ impl WasmTranslator {
                 .locals
                 .insert(("$function".to_string(), "anyref".to_string()));
             instructions.push(self.translate_expression(call.function()));
-            instructions.push(WatInstruction::local_set("$function"));
+            instructions.push(W::local_set("$function"));
 
             // Call the function
-            instructions.push(WatInstruction::call(
+            instructions.push(W::call(
                 "$call_function",
                 vec![
-                    WatInstruction::local_get("$scope"),
-                    WatInstruction::local_get("$function"),
+                    W::local_get("$scope"),
+                    W::local_get("$function"),
                     get_this,
-                    WatInstruction::local_get("$call_arguments"),
+                    W::local_get("$call_arguments"),
                 ],
             ));
         }
 
-        WatInstruction::list(instructions)
+        W::list(instructions)
     }
 
-    fn translate_let_vars(&mut self, variable_list: &VariableList) -> Box<WatInstruction> {
+    fn translate_let_vars(&mut self, variable_list: &VariableList) -> Box<W> {
         use boa_ast::declaration::Binding;
 
         self.current_function()
@@ -333,23 +319,22 @@ impl WasmTranslator {
                         let offset = self.add_identifier(&identifier);
 
                         instructions.push(self.translate_expression(expression));
-                        instructions.push(WatInstruction::local_set("$var"));
+                        instructions.push(W::local_set("$var"));
 
-                        instructions.push(WatInstruction::local_get("$scope"));
-                        instructions.push(WatInstruction::i32_const(offset));
-                        instructions.push(WatInstruction::local_get("$var"));
-                        instructions
-                            .push(WatInstruction::call("$set_variable".to_string(), vec![]));
+                        instructions.push(W::local_get("$scope"));
+                        instructions.push(W::i32_const(offset));
+                        instructions.push(W::local_get("$var"));
+                        instructions.push(W::call("$set_variable".to_string(), vec![]));
                     }
                     Binding::Pattern(_pattern) => todo!(),
                 }
             }
         }
 
-        WatInstruction::list(instructions)
+        W::list(instructions)
     }
 
-    fn translate_binary(&mut self, binary: &Binary) -> Box<WatInstruction> {
+    fn translate_binary(&mut self, binary: &Binary) -> Box<W> {
         use boa_ast::expression::operator::binary::RelationalOp;
 
         // println!("Binary: {binary:#?}");
@@ -367,7 +352,7 @@ impl WasmTranslator {
                 // multiple lines and saving to local vars
                 let lhs = self.translate_expression(binary.lhs());
                 let rhs = self.translate_expression(binary.rhs());
-                WatInstruction::call(func.to_string(), vec![lhs, rhs])
+                W::call(func.to_string(), vec![lhs, rhs])
             }
             BinaryOp::Bitwise(_bitwise_op) => todo!(),
             BinaryOp::Relational(relational_op) => {
@@ -390,12 +375,12 @@ impl WasmTranslator {
                     .locals
                     .insert(("$rhs".to_string(), "anyref".to_string()));
 
-                WatInstruction::list(vec![
+                W::list(vec![
                     self.translate_expression(binary.rhs()),
-                    WatInstruction::local_set("$rhs"),
+                    W::local_set("$rhs"),
                     self.translate_expression(binary.lhs()),
-                    WatInstruction::local_get("$rhs"),
-                    WatInstruction::call(func_name, vec![]),
+                    W::local_get("$rhs"),
+                    W::call(func_name, vec![]),
                 ])
             }
             BinaryOp::Logical(_logical_op) => todo!(),
@@ -403,18 +388,15 @@ impl WasmTranslator {
         }
     }
 
-    fn translate_identifier(&mut self, identifier: &Identifier) -> Box<WatInstruction> {
+    fn translate_identifier(&mut self, identifier: &Identifier) -> Box<W> {
         let offset = self.add_identifier(identifier);
 
         if identifier.to_interned_string(&self.interner) == "undefined" {
-            WatInstruction::ref_null("any")
+            W::ref_null("any")
         } else {
-            WatInstruction::call(
+            W::call(
                 "$get_variable".to_string(),
-                vec![
-                    WatInstruction::local_get("$scope"),
-                    WatInstruction::i32_const(offset),
-                ],
+                vec![W::local_get("$scope"), W::i32_const(offset)],
             )
         }
     }
@@ -422,8 +404,8 @@ impl WasmTranslator {
     fn translate_property_access(
         &mut self,
         property_access: &PropertyAccess,
-        assign: Option<Box<WatInstruction>>,
-    ) -> Box<WatInstruction> {
+        assign: Option<Box<W>>,
+    ) -> Box<W> {
         use boa_ast::expression::access::PropertyAccessField;
 
         println!("Property access: {:#?}", property_access);
@@ -439,19 +421,19 @@ impl WasmTranslator {
 
                         if let Some(assign_instruction) = assign {
                             self.current_function().add_local("$temp_anyref", "anyref");
-                            WatInstruction::list(vec![
+                            W::list(vec![
                                 assign_instruction,
-                                WatInstruction::local_set("$temp_anyref"),
+                                W::local_set("$temp_anyref"),
                                 target,
-                                WatInstruction::i32_const(offset),
-                                WatInstruction::local_get("$temp_anyref"),
-                                WatInstruction::call("$set_property", vec![]),
+                                W::i32_const(offset),
+                                W::local_get("$temp_anyref"),
+                                W::call("$set_property", vec![]),
                             ])
                         } else {
-                            WatInstruction::list(vec![
+                            W::list(vec![
                                 target,
-                                WatInstruction::i32_const(offset),
-                                WatInstruction::call("$get_property", vec![]),
+                                W::i32_const(offset),
+                                W::call("$get_property", vec![]),
                             ])
                         }
                     }
@@ -463,13 +445,13 @@ impl WasmTranslator {
         }
     }
 
-    fn translate_expression(&mut self, expression: &Expression) -> Box<WatInstruction> {
+    fn translate_expression(&mut self, expression: &Expression) -> Box<W> {
         println!(
             "translate expression {}",
             expression.to_interned_string(&self.interner)
         );
         match expression {
-            Expression::This => WatInstruction::local_get("$this"),
+            Expression::This => W::local_get("$this"),
             Expression::Identifier(identifier) => self.translate_identifier(identifier),
             Expression::Literal(literal) => self.translate_literal(literal),
             Expression::RegExpLiteral(_reg_exp_literal) => todo!(),
@@ -491,7 +473,7 @@ impl WasmTranslator {
             }
             Expression::New(new) => self.translate_new(new),
             // TODO: the default this value is a global object
-            Expression::Call(call) => self.translate_call(call, WatInstruction::ref_null("any")),
+            Expression::Call(call) => self.translate_call(call, W::ref_null("any")),
             Expression::SuperCall(_super_call) => todo!(),
             Expression::ImportCall(_import_call) => todo!(),
             Expression::Optional(_optional) => todo!(),
@@ -511,26 +493,26 @@ impl WasmTranslator {
         }
     }
 
-    fn translate_new(&mut self, new: &New) -> Box<WatInstruction> {
+    fn translate_new(&mut self, new: &New) -> Box<W> {
         self.current_function()
             .add_local("$new_instance", "(ref $Object)");
-        WatInstruction::list(vec![
-            WatInstruction::call("$new_object", vec![]),
-            WatInstruction::local_set("$new_instance"),
-            self.translate_call(new.call(), WatInstruction::local_get("$new_instance")),
-            WatInstruction::drop(),
+        W::list(vec![
+            W::call("$new_object", vec![]),
+            W::local_set("$new_instance"),
+            self.translate_call(new.call(), W::local_get("$new_instance")),
+            W::drop(),
             // TODO: we return the created instance, but it's not always the case
             // in JS. If the returned value is an object, we should return the returned
             // value, so we need to add an if with a `ref.test` here
-            WatInstruction::local_get("$new_instance"),
+            W::local_get("$new_instance"),
         ])
     }
 
-    fn translate_arrow_function(&mut self, function: &ArrowFunction) -> Box<WatInstruction> {
+    fn translate_arrow_function(&mut self, function: &ArrowFunction) -> Box<W> {
         self.translate_function_generic(function.name(), function.parameters(), function.body())
     }
 
-    fn translate_update(&mut self, update: &Update) -> Box<WatInstruction> {
+    fn translate_update(&mut self, update: &Update) -> Box<W> {
         use boa_ast::expression::operator::update::UpdateOp;
         let identifier = match update.target() {
             UpdateTarget::Identifier(identifier) => identifier,
@@ -542,31 +524,31 @@ impl WasmTranslator {
 
         // TODO: figure out pre vs post behaviour
         let instruction = match update.op() {
-            UpdateOp::IncrementPost => WatInstruction::call("$increment_number", vec![]),
-            UpdateOp::IncrementPre => WatInstruction::call("$increment_number", vec![]),
-            UpdateOp::DecrementPost => WatInstruction::call("$decrement_number", vec![]),
-            UpdateOp::DecrementPre => WatInstruction::call("$decrement_number", vec![]),
+            UpdateOp::IncrementPost => W::call("$increment_number", vec![]),
+            UpdateOp::IncrementPre => W::call("$increment_number", vec![]),
+            UpdateOp::DecrementPost => W::call("$decrement_number", vec![]),
+            UpdateOp::DecrementPre => W::call("$decrement_number", vec![]),
         };
         let target = self.translate_identifier(identifier);
         let offset = self.add_identifier(identifier);
-        let set_variable = WatInstruction::call(
+        let set_variable = W::call(
             "$set_variable".to_string(),
             vec![
-                WatInstruction::local_get("$scope".to_string()),
-                WatInstruction::i32_const(offset),
-                WatInstruction::local_get("$var"),
+                W::local_get("$scope".to_string()),
+                W::i32_const(offset),
+                W::local_get("$var"),
             ],
         );
 
-        WatInstruction::list(vec![
+        W::list(vec![
             target,
             instruction,
-            WatInstruction::local_set("$var"),
+            W::local_set("$var"),
             set_variable,
         ])
     }
 
-    fn translate_assign(&mut self, assign: &Assign) -> Box<WatInstruction> {
+    fn translate_assign(&mut self, assign: &Assign) -> Box<W> {
         use boa_ast::expression::operator::assign::AssignOp;
         use boa_ast::expression::operator::assign::AssignTarget;
 
@@ -581,15 +563,15 @@ impl WasmTranslator {
                         self.current_function()
                             .locals
                             .insert(("$rhs".to_string(), "anyref".to_string()));
-                        WatInstruction::list(vec![
+                        W::list(vec![
                             rhs,
-                            WatInstruction::local_set("$rhs"),
-                            WatInstruction::call(
+                            W::local_set("$rhs"),
+                            W::call(
                                 "$set_variable".to_string(),
                                 vec![
-                                    WatInstruction::local_get("$scope".to_string()),
-                                    WatInstruction::i32_const(offset),
-                                    WatInstruction::local_get("$rhs"),
+                                    W::local_get("$scope".to_string()),
+                                    W::i32_const(offset),
+                                    W::local_get("$rhs"),
                                 ],
                             ),
                         ])
@@ -618,44 +600,34 @@ impl WasmTranslator {
         }
     }
 
-    fn translate_unary(&mut self, unary: &Unary) -> Box<WatInstruction> {
+    fn translate_unary(&mut self, unary: &Unary) -> Box<W> {
         println!("unary: {:#?}", unary);
 
-        WatInstruction::empty()
+        W::empty()
     }
 
-    fn translate_literal(&mut self, lit: &Literal) -> Box<WatInstruction> {
+    fn translate_literal(&mut self, lit: &Literal) -> Box<W> {
         println!("translate_literal: {lit:#?}");
         match lit {
-            Literal::Num(num) => {
-                WatInstruction::call("$new_number", vec![WatInstruction::f64_const(*num)])
-            }
+            Literal::Num(num) => W::call("$new_number", vec![W::f64_const(*num)]),
             Literal::String(s) => {
                 let s = self.interner.resolve(*s).unwrap().to_string();
                 let (offset, length) = self.insert_data_string(&s);
 
-                WatInstruction::call(
+                W::call(
                     "$new_string",
-                    vec![
-                        WatInstruction::i32_const(offset),
-                        WatInstruction::i32_const(length),
-                    ],
+                    vec![W::i32_const(offset), W::i32_const(length)],
                 )
             }
-            Literal::Int(i) => {
-                WatInstruction::call("$new_number", vec![WatInstruction::f64_const(*i as f64)])
-            }
+            Literal::Int(i) => W::call("$new_number", vec![W::f64_const(*i as f64)]),
             Literal::BigInt(_big_int) => todo!(),
-            Literal::Bool(b) => WatInstruction::call(
-                "$new_boolean",
-                vec![WatInstruction::i32_const(if *b { 1 } else { 0 })],
-            ),
-            Literal::Null => WatInstruction::ref_i31(WatInstruction::i32_const(2)),
-            Literal::Undefined => WatInstruction::ref_null("any"),
+            Literal::Bool(b) => W::call("$new_boolean", vec![W::i32_const(if *b { 1 } else { 0 })]),
+            Literal::Null => W::ref_i31(W::i32_const(2)),
+            Literal::Undefined => W::ref_null("any"),
         }
     }
 
-    fn translate_declaration(&mut self, declaration: &Declaration) -> Box<WatInstruction> {
+    fn translate_declaration(&mut self, declaration: &Declaration) -> Box<W> {
         // println!(
         //     "translate_declaration {}",
         //     declaration.to_interned_string(&self.interner)
@@ -666,13 +638,9 @@ impl WasmTranslator {
                 // function declaration still needs to be added to the scope if function has a name
                 if let Some(name) = decl.name() {
                     let offset = self.add_identifier(&name);
-                    WatInstruction::call(
+                    W::call(
                         "$set_variable".to_string(),
-                        vec![
-                            WatInstruction::local_get("$scope"),
-                            WatInstruction::i32_const(offset),
-                            declaration,
-                        ],
+                        vec![W::local_get("$scope"), W::i32_const(offset), declaration],
                     )
                 } else {
                     // TODO: if it's empty and not called right away I guess we can just ignore it?
@@ -707,7 +675,7 @@ impl WasmTranslator {
         (offset, len)
     }
 
-    fn translate_statement(&mut self, statement: &Statement) -> Box<WatInstruction> {
+    fn translate_statement(&mut self, statement: &Statement) -> Box<W> {
         match statement {
             Statement::Block(block) => self.translate_block(block),
             Statement::Var(var_declaration) => self.translate_let(var_declaration),
@@ -730,11 +698,7 @@ impl WasmTranslator {
         }
     }
 
-    fn translate_catch(
-        &mut self,
-        catch: Option<&Catch>,
-        finally: Option<&Finally>,
-    ) -> Box<WatInstruction> {
+    fn translate_catch(&mut self, catch: Option<&Catch>, finally: Option<&Finally>) -> Box<W> {
         use boa_ast::declaration::Binding;
         let catch_instr = if let Some(catch) = catch {
             let binding_instr = if let Some(binding) = catch.parameter() {
@@ -742,14 +706,14 @@ impl WasmTranslator {
                     Binding::Identifier(identifier) => {
                         self.current_function().add_local("$temp_anyref", "anyref");
                         let offset = self.add_identifier(identifier);
-                        WatInstruction::list(vec![
-                            WatInstruction::local_set("$temp_anyref"),
-                            WatInstruction::call(
+                        W::list(vec![
+                            W::local_set("$temp_anyref"),
+                            W::call(
                                 "$set_variable".to_string(),
                                 vec![
-                                    WatInstruction::local_get("$scope".to_string()),
-                                    WatInstruction::i32_const(offset),
-                                    WatInstruction::local_get("$temp_anyref"),
+                                    W::local_get("$scope".to_string()),
+                                    W::i32_const(offset),
+                                    W::local_get("$temp_anyref"),
                                 ],
                             ),
                         ])
@@ -757,45 +721,42 @@ impl WasmTranslator {
                     Binding::Pattern(_) => todo!(),
                 }
             } else {
-                WatInstruction::drop()
+                W::drop()
             };
-            WatInstruction::list(vec![binding_instr, self.translate_block(catch.block())])
+            W::list(vec![binding_instr, self.translate_block(catch.block())])
         } else {
-            WatInstruction::empty()
+            W::empty()
         };
         let finally_instr = if let Some(finally) = finally {
             self.translate_block(finally.block())
         } else {
-            WatInstruction::empty()
+            W::empty()
         };
         // TODO: if catch throws an error this will not behave as it should.
         // we need to add another try inside, catch anything that happens
         // there, run finally and then rethrow
-        WatInstruction::catch(
-            "$JSException",
-            WatInstruction::list(vec![catch_instr, finally_instr]),
-        )
+        W::catch("$JSException", W::list(vec![catch_instr, finally_instr]))
     }
 
-    fn translate_try(&mut self, r#try: &Try) -> Box<WatInstruction> {
+    fn translate_try(&mut self, r#try: &Try) -> Box<W> {
         let block = r#try.block();
         let catch = r#try.catch();
         let finally = r#try.finally();
         let instr = self.translate_catch(catch, finally);
 
-        WatInstruction::r#try(self.translate_block(block), vec![instr], None)
+        W::r#try(self.translate_block(block), vec![instr], None)
     }
 
-    fn translate_throw(&mut self, throw: &Throw) -> Box<WatInstruction> {
+    fn translate_throw(&mut self, throw: &Throw) -> Box<W> {
         let target = self.translate_expression(throw.target());
-        WatInstruction::list(vec![target, WatInstruction::throw("$JSException")])
+        W::list(vec![target, W::throw("$JSException")])
     }
 
-    fn translate_if_statement(&mut self, if_statement: &If) -> Box<WatInstruction> {
-        WatInstruction::list(vec![
+    fn translate_if_statement(&mut self, if_statement: &If) -> Box<W> {
+        W::list(vec![
             self.translate_expression(if_statement.cond()),
-            WatInstruction::call("$cast_ref_to_i32_bool", vec![]),
-            WatInstruction::r#if(
+            W::call("$cast_ref_to_i32_bool", vec![]),
+            W::r#if(
                 None,
                 vec![self.translate_statement(if_statement.body())],
                 if_statement
@@ -805,30 +766,30 @@ impl WasmTranslator {
         ])
     }
 
-    fn translate_while_loop(&mut self, while_loop: &WhileLoop) -> Box<WatInstruction> {
+    fn translate_while_loop(&mut self, while_loop: &WhileLoop) -> Box<W> {
         println!("condition: {:#?}", while_loop.condition());
         let condition = self.translate_expression(while_loop.condition());
         println!("while_loop: {while_loop:#?}");
         println!("condition: {condition:#?}");
-        WatInstruction::r#loop(
+        W::r#loop(
             "$while_loop".to_string(),
-            vec![WatInstruction::block(
+            vec![W::block(
                 "$break",
                 vec![
                     condition,
-                    WatInstruction::call("$cast_ref_to_i32_bool", vec![]),
-                    WatInstruction::i32_eqz(),
-                    WatInstruction::br_if("$break"),
+                    W::call("$cast_ref_to_i32_bool", vec![]),
+                    W::i32_eqz(),
+                    W::br_if("$break"),
                     self.translate_statement(while_loop.body()),
-                    WatInstruction::br("$while_loop"),
+                    W::br("$while_loop"),
                 ],
             )],
         )
     }
 
-    fn translate_block(&mut self, block: &Block) -> Box<WatInstruction> {
+    fn translate_block(&mut self, block: &Block) -> Box<W> {
         self.enter_block();
-        let block_instr = WatInstruction::block(
+        let block_instr = W::block(
             self.current_block_name(),
             block
                 .statement_list()
@@ -842,10 +803,7 @@ impl WasmTranslator {
         block_instr
     }
 
-    fn translate_statement_list_item(
-        &mut self,
-        statement: &StatementListItem,
-    ) -> Box<WatInstruction> {
+    fn translate_statement_list_item(&mut self, statement: &StatementListItem) -> Box<W> {
         match statement {
             StatementListItem::Statement(statement) => self.translate_statement(statement),
             StatementListItem::Declaration(declaration) => self.translate_declaration(declaration),
@@ -913,12 +871,9 @@ fn main() -> io::Result<()> {
     let init = translator.module.get_function_mut("init").unwrap();
     init.locals
         .insert(("$scope".to_string(), "(ref $Scope)".to_string()));
+    init.body.push_front(W::local_set("$scope".to_string()));
     init.body
-        .push_front(WatInstruction::local_set("$scope".to_string()));
-    init.body.push_front(WatInstruction::call(
-        "$new_scope",
-        vec![WatInstruction::ref_null("$Scope")],
-    ));
+        .push_front(W::call("$new_scope", vec![W::ref_null("$Scope")]));
 
     // Generate the full WAT module
     let module = translator.module.to_string();
