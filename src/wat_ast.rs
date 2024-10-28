@@ -77,6 +77,13 @@ pub enum WatInstruction {
     LocalTee(String),
     RefI31(Box<WatInstruction>),
     Throw(String),
+    Try {
+        try_block: Box<WatInstruction>,
+        catches: Vec<Box<WatInstruction>>,
+        catch_all: Option<Box<WatInstruction>>,
+    },
+    Catch(String, Box<WatInstruction>),
+    CatchAll(Box<WatInstruction>),
 }
 
 impl WatInstruction {
@@ -152,9 +159,9 @@ impl WatInstruction {
         Box::new(Self::Return)
     }
 
-    pub fn block(label: String, instructions: Vec<Box<WatInstruction>>) -> Box<Self> {
+    pub fn block(label: impl Into<String>, instructions: Vec<Box<WatInstruction>>) -> Box<Self> {
         Box::new(Self::Block {
-            label,
+            label: label.into(),
             instructions,
         })
     }
@@ -219,6 +226,22 @@ impl WatInstruction {
 
     pub fn r#type(name: impl Into<String>) -> Box<Self> {
         Box::new(Self::Type { name: name.into() })
+    }
+
+    pub fn r#try(
+        try_block: Box<Self>,
+        catches: Vec<Box<Self>>,
+        catch_all: Option<Box<Self>>,
+    ) -> Box<Self> {
+        Box::new(Self::Try {
+            try_block,
+            catches,
+            catch_all,
+        })
+    }
+
+    pub fn catch(label: impl Into<String>, instr: Box<Self>) -> Box<Self> {
+        Box::new(Self::Catch(label.into(), instr))
     }
 }
 
@@ -316,6 +339,27 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I32Eqz => write!(f, "(i32.eqz)"),
             WatInstruction::RefI31(instruction) => write!(f, "(ref.i31 {instruction})"),
             WatInstruction::Throw(label) => write!(f, "(throw {label})"),
+            WatInstruction::Try {
+                try_block,
+                catches,
+                catch_all,
+            } => {
+                writeln!(
+                    f,
+                    "\ntry\n{try_block}{}{}\nend",
+                    catches
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<String>>()
+                        .join(""),
+                    catch_all
+                        .clone()
+                        .map(|c| c.to_string())
+                        .unwrap_or("".to_string())
+                )
+            }
+            WatInstruction::Catch(label, instr) => writeln!(f, "\ncatch {label}\n{instr}"),
+            WatInstruction::CatchAll(instr) => writeln!(f, "\ncatch_all\n{instr}"),
         }
     }
 }

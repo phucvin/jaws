@@ -46,16 +46,22 @@
   ;; Define a function that takes an externref and tries to cast it to $custom_type
   (func $check-try-catch-rethrow
     try
-      call $check-throw
+    (block
+                 call $check-throw
       unreachable
-    catch 0
+      )
+catch 0
+drop
+(block
       ;; the exception arguments are on the stack at this point
-      drop
+      )
     catch 1
       drop
+    (block $foo
+      )
       ;;i64.const 2
     catch_all
-      rethrow 0
+    (block)
     end
   )
   (func $try-with-params

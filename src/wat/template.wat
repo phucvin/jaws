@@ -1,4 +1,5 @@
 (module
+  (type (func (param i32)))
   (type (func (param anyref)))
   (type $write_type (func (param i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_write" (func $write (type $write_type)))
@@ -6,7 +7,8 @@
   ;; 64KB
   (memory (export "memory") 1)
 
-  (tag $exception (type 0))
+  (tag $InternalException (type 0))
+  (tag $JSException (type 1))
 
   (global $free_memory_offset i32 (i32.const {free_memory_offset}))
 
@@ -203,7 +205,7 @@
       )
     )
 
-    (throw $exception (ref.i31 (i32.const 100)))
+    (throw $InternalException (i32.const 0))
   )
 
   (func $set_property (param $target anyref) (param $name i32) (param $value anyref)
@@ -219,7 +221,7 @@
       )
     )
 
-    (throw $exception (ref.i31 (i32.const 100)))
+    (throw $InternalException (i32.const 1))
   )
 
   (func $hashmap_set (param $map (ref $HashMap)) (param $key i32) (param $value anyref)
@@ -368,6 +370,16 @@
     (ref.null any)
   )
 
+  (func $strict_not_equal (param $arg1 anyref) (param $arg2 anyref) (result i31ref)
+    (return 
+      (ref.i31
+        (i32.eqz
+          (i31.get_s
+            (ref.cast 
+              (ref null i31)
+              (call $strict_equal (local.get $arg1) (local.get $arg2))))))
+    )
+  )
   (func $strict_equal (param $arg1 anyref) (param $arg2 anyref) (result i31ref)
     (local $num1 (ref $Number))
     (local $num2 (ref $Number))

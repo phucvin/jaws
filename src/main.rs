@@ -11,7 +11,7 @@ use boa_ast::{
         Call, Expression, Identifier, New,
     },
     function::{ArrowFunction, FormalParameterList, Function, FunctionBody},
-    statement::{Block, If, Return, Statement, Throw, WhileLoop},
+    statement::{Block, Catch, Finally, If, Return, Statement, Throw, Try, WhileLoop},
     visitor::{VisitWith, Visitor},
     StatementListItem,
 };
@@ -52,6 +52,7 @@ struct WasmTranslator {
     data_entries: Vec<String>,
     data_offset: i32,
     identifiers_map: HashMap<i32, i32>,
+    current_block_number: u32,
 }
 
 impl WasmTranslator {
@@ -67,6 +68,7 @@ impl WasmTranslator {
             data_entries: Vec::new(),
             data_offset: 200,
             identifiers_map: HashMap::new(),
+            current_block_number: 0,
         }
     }
 
@@ -74,7 +76,7 @@ impl WasmTranslator {
         println!(
             "symbol: {}, JS: {}",
             identifier.get(),
-            self.interner.resolve(identifier).unwrap().to_string()
+            self.interner.resolve(identifier).unwrap()
         );
         if let Some(offset) = self.identifiers_map.get(&(identifier.get() as i32)) {
             *offset
@@ -102,6 +104,18 @@ impl WasmTranslator {
     fn exit_function(&mut self) {
         let function = self.function_stack.pop().unwrap();
         self.module.add_function(function);
+    }
+
+    fn enter_block(&mut self) {
+        self.current_block_number += 1;
+    }
+
+    fn exit_block(&mut self) {
+        self.current_block_number -= 1;
+    }
+
+    fn current_block_name(&self) -> String {
+        format!("$block-{}", self.current_block_number)
     }
 
     fn translate_return(&mut self, ret: &Return) -> Box<WatInstruction> {
@@ -361,7 +375,7 @@ impl WasmTranslator {
                     RelationalOp::Equal => todo!(),
                     RelationalOp::NotEqual => todo!(),
                     RelationalOp::StrictEqual => "$strict_equal",
-                    RelationalOp::StrictNotEqual => todo!(),
+                    RelationalOp::StrictNotEqual => "$strict_not_equal",
                     RelationalOp::GreaterThan => todo!(),
                     RelationalOp::GreaterThanOrEqual => "$greater_than_or_equal",
                     RelationalOp::LessThan => "$less_than",
@@ -711,14 +725,70 @@ impl WasmTranslator {
             Statement::Return(ret) => self.translate_return(ret),
             Statement::Labelled(_labelled) => todo!(),
             Statement::Throw(throw) => self.translate_throw(throw),
-            Statement::Try(_) => todo!(),
+            Statement::Try(r#try) => self.translate_try(r#try),
             Statement::With(_with) => todo!(),
         }
     }
 
+    fn translate_catch(
+        &mut self,
+        catch: Option<&Catch>,
+        finally: Option<&Finally>,
+    ) -> Box<WatInstruction> {
+        use boa_ast::declaration::Binding;
+        let catch_instr = if let Some(catch) = catch {
+            let binding_instr = if let Some(binding) = catch.parameter() {
+                match binding {
+                    Binding::Identifier(identifier) => {
+                        self.current_function().add_local("$temp_anyref", "anyref");
+                        let offset = self.add_identifier(identifier);
+                        WatInstruction::list(vec![
+                            WatInstruction::local_set("$temp_anyref"),
+                            WatInstruction::call(
+                                "$set_variable".to_string(),
+                                vec![
+                                    WatInstruction::local_get("$scope".to_string()),
+                                    WatInstruction::i32_const(offset),
+                                    WatInstruction::local_get("$temp_anyref"),
+                                ],
+                            ),
+                        ])
+                    }
+                    Binding::Pattern(_) => todo!(),
+                }
+            } else {
+                WatInstruction::drop()
+            };
+            WatInstruction::list(vec![binding_instr, self.translate_block(catch.block())])
+        } else {
+            WatInstruction::empty()
+        };
+        let finally_instr = if let Some(finally) = finally {
+            self.translate_block(finally.block())
+        } else {
+            WatInstruction::empty()
+        };
+        // TODO: if catch throws an error this will not behave as it should.
+        // we need to add another try inside, catch anything that happens
+        // there, run finally and then rethrow
+        WatInstruction::catch(
+            "$JSException",
+            WatInstruction::list(vec![catch_instr, finally_instr]),
+        )
+    }
+
+    fn translate_try(&mut self, r#try: &Try) -> Box<WatInstruction> {
+        let block = r#try.block();
+        let catch = r#try.catch();
+        let finally = r#try.finally();
+        let instr = self.translate_catch(catch, finally);
+
+        WatInstruction::r#try(self.translate_block(block), vec![instr], None)
+    }
+
     fn translate_throw(&mut self, throw: &Throw) -> Box<WatInstruction> {
         let target = self.translate_expression(throw.target());
-        WatInstruction::list(vec![target, WatInstruction::throw("$exception")])
+        WatInstruction::list(vec![target, WatInstruction::throw("$JSException")])
     }
 
     fn translate_if_statement(&mut self, if_statement: &If) -> Box<WatInstruction> {
@@ -743,7 +813,7 @@ impl WasmTranslator {
         WatInstruction::r#loop(
             "$while_loop".to_string(),
             vec![WatInstruction::block(
-                "$break".into(),
+                "$break",
                 vec![
                     condition,
                     WatInstruction::call("$cast_ref_to_i32_bool", vec![]),
@@ -757,14 +827,19 @@ impl WasmTranslator {
     }
 
     fn translate_block(&mut self, block: &Block) -> Box<WatInstruction> {
-        WatInstruction::list(
+        self.enter_block();
+        let block_instr = WatInstruction::block(
+            self.current_block_name(),
             block
                 .statement_list()
                 .statements()
                 .iter()
                 .map(|s| self.translate_statement_list_item(s))
                 .collect(),
-        )
+        );
+        self.exit_block();
+
+        block_instr
     }
 
     fn translate_statement_list_item(
@@ -831,7 +906,6 @@ fn main() -> io::Result<()> {
     let ast = parser.parse_script(&mut interner).unwrap();
 
     let mut translator = WasmTranslator::new(interner);
-    println!("{ast:#?}");
     ast.visit_with(&mut translator);
     // exit $init function
     translator.exit_function();
