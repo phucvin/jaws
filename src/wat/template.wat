@@ -22,12 +22,29 @@
   (data (i32.const 192) "\n")
   ;; define empty string in memory
   (data (i32.const 196) " ")
+  (data (i32.const 200) "undefined")
+  (data (i32.const 212) "object")
+  (data (i32.const 220) "boolean")
+  (data (i32.const 228) "number")
+  (data (i32.const 236) "bigint")
+  (data (i32.const 244) "string")
+  (data (i32.const 252) "symbol")
+  (data (i32.const 260) "function")
+
   {data}
+
+  (type $CharArray (array (mut i8)))
+
+  (type $String (struct
+    (field $data (mut (ref $CharArray)))
+    (field $length (mut i32))
+  ))
 
   (type $StaticString (struct
     (field $offset i32)
     (field $length i32)
   ))
+
 
   (type $HashMapEntry (struct
     (field $key (mut i32))
@@ -61,6 +78,7 @@
   (type $Function (struct
     (field $scope (mut (ref $Scope)))
     (field $func (mut (ref $JSFunc)))
+    (field $properties (mut (ref $HashMap)))
   ))
 
   (type $Object (struct
@@ -69,6 +87,124 @@
   ))
 
   (type $Number (struct (field (mut f64))))
+
+  {additional_functions}
+
+  ;; TODO: we could use data from (data) entries for creating strings, but in order
+  ;; to do that there would have to be a function with mapping between data labels
+  ;; and offsets, cause it's not possible to pass a data label to a function
+  ;; Function to create a String from two parts
+  (func $add_static_strings (param $ptr1 i32) (param $len1 i32) (param $ptr2 i32) (param $len2 i32) (result (ref $String))
+    (local $total_length i32)
+    (local $string_data (ref $CharArray))
+    (local $i i32)
+    
+    ;; Calculate total length
+    (local.set $total_length 
+      (i32.add
+        (local.get $len1)
+        (local.get $len2)
+      )
+    )
+    
+    ;; Create new byte array for string data
+    (local.set $string_data (array.new_default $CharArray (local.get $total_length)))
+    
+    ;; Copy first part
+    (local.set $i (i32.const 0))
+    (block $break1
+      (loop $copy1
+        (br_if $break1 (i32.ge_u (local.get $i) (local.get $len1)))
+        
+        (array.set $CharArray (local.get $string_data)
+          (local.get $i)
+          (i32.load8_u (i32.add (local.get $ptr1) (local.get $i)))
+        )
+        
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $copy1)
+      )
+    )
+    ;; Copy second part
+    (local.set $i (i32.const 0))
+    (block $break2
+      (loop $copy2
+        (br_if $break2 (i32.ge_u (local.get $i) (local.get $len2)))
+        
+        (array.set $CharArray (local.get $string_data) 
+          (i32.add (local.get $len1) (local.get $i))
+          (i32.load8_u (i32.add (local.get $ptr2) (local.get $i)))
+        )
+        
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $copy2)
+      )
+    )
+    
+    ;; Create and return new String struct
+    (struct.new $String
+      (local.get $string_data)    ;; data field
+      (local.get $total_length)   ;; length field
+    )
+  )
+
+  (func $add_static_string_to_string (param $str (ref $String)) (param $ptr i32) (param $len i32) (result (ref $String))
+    (local $total_length i32)
+    (local $new_string_data (ref $CharArray))
+    (local $string_data (ref $CharArray))
+    (local $i i32)
+    (local $str_len i32)
+    
+    (local.set $str_len
+      (struct.get $String $length (local.get $str)))
+    (local.set $string_data
+      (struct.get $String $data (local.get $str)))
+
+    ;; Calculate total length
+    (local.set $total_length 
+      (i32.add
+        (local.get $str_len)
+        (local.get $len)
+      )
+    )
+    
+    ;; Create new byte array for string data
+    (local.set $new_string_data (array.new_default $CharArray (local.get $total_length)))
+    
+    ;; Copy data from string
+    (array.copy
+      $CharArray               ;; dest type
+      $CharArray               ;; source type
+      (local.get $new_string_data) ;; dest array
+      (i32.const 0)            ;; dest offset
+      (local.get $string_data) ;; source array
+      (i32.const 0)            ;; source data offest
+      (local.get $str_len)     ;; source data length
+    )
+    
+    ;; Copy from $StaticString
+    (local.set $i (i32.const 0))
+    (block $break2
+      (loop $copy2
+        (br_if $break2 (i32.ge_u (local.get $i) (local.get $len)))
+        
+        (array.set $CharArray (local.get $new_string_data) 
+          (i32.add (local.get $str_len) (local.get $i))
+          (i32.load8_u (i32.add (local.get $ptr) (local.get $i)))
+        )
+        
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $copy2)
+      )
+    )
+    
+    ;; Create and return new String struct
+    (struct.new $String
+      (local.get $new_string_data)    ;; data field
+      (local.get $total_length)   ;; length field
+    )
+  )
+
 
   (func $new_hashmap (result (ref $HashMap))
     (struct.new $HashMap
@@ -92,6 +228,7 @@
     (struct.new $Function
       (local.get $scope)
       (local.get $function)
+      (call $new_hashmap)
     )
   )
 
@@ -145,7 +282,7 @@
     i32.const 0
   )
 
-  (func $new_string (param $offset i32) (param $length i32) (result (ref $StaticString))
+  (func $new_static_string (param $offset i32) (param $length i32) (result (ref $StaticString))
     (struct.new $StaticString
       (local.get $offset)
       (local.get $length)
@@ -183,6 +320,12 @@
       (if (ref.is_null (local.get $value))
         (then
           (local.set $current_scope (struct.get $Scope $parent (local.get $current_scope)))
+          (if (ref.is_null (local.get $current_scope))
+            (then
+              (throw $JSException (ref.i31 (i32.const 103)))
+            )
+          )
+ 
           (br $search_loop)
         )
         (else
@@ -190,11 +333,10 @@
         )
       )
     )
-    (return (ref.null any))
+    (throw $JSException (ref.i31 (i32.const 103)))
   )
 
   (func $get_property (param $target anyref) (param $name i32) (result anyref)
-    ;; for now we just support $Object for properties
     (if (ref.test (ref $Object) (local.get $target))
       (then
         (call $hashmap_get
@@ -205,11 +347,23 @@
       )
     )
 
-    (throw $InternalException (i32.const 0))
+    ;; TODO: as long as objects like Function and String are just another objects
+    ;; we will have to reimplement a lot of stuff like this. It would be great
+    ;; to research parent and child types
+    (if (ref.test (ref $Function) (local.get $target))
+      (then
+        (call $hashmap_get
+          (struct.get $Function $properties (ref.cast (ref $Function) (local.get $target)))
+          (local.get $name)
+        )
+        (return)
+      )
+    )
+
+    (throw $JSException (ref.i31 (i32.const 100)))
   )
 
   (func $set_property (param $target anyref) (param $name i32) (param $value anyref)
-    ;; for now we just support $Object for properties
     (if (ref.test (ref $Object) (local.get $target))
       (then
         (call $hashmap_set
@@ -221,7 +375,18 @@
       )
     )
 
-    (throw $InternalException (i32.const 1))
+    (if (ref.test (ref $Function) (local.get $target))
+      (then
+        (call $hashmap_set
+          (struct.get $Function $properties (ref.cast (ref $Function) (local.get $target)))
+          (local.get $name)
+          (local.get $value)
+        )
+        (return)
+      )
+    )
+
+    (throw $JSException (ref.i31 (i32.const 101)))
   )
 
   (func $hashmap_set (param $map (ref $HashMap)) (param $key i32) (param $value anyref)
@@ -334,17 +499,87 @@
   (func $add (param $arg1 anyref) (param $arg2 anyref) (result anyref)
     (local $num1 (ref $Number))
     (local $num2 (ref $Number))
+    (local $static_str1 (ref $StaticString))
+    (local $static_str2 (ref $StaticString))
+    (local $str1 (ref $String))
+    (local $str2 (ref $String))
     (local $result f64)
 
-    (local.set $num1 (ref.cast (ref $Number) (local.get $arg1)))
-    (local.set $num2 (ref.cast (ref $Number) (local.get $arg2)))
-    (local.set $result
-      (f64.add
-        (struct.get $Number 0 (local.get $num1))
-        (struct.get $Number 0 (local.get $num2))
+    ;; TODO: this doesn't take into account casting, it can only add two objects
+    ;; of the same type (and only numbers and strings for now)
+    (if (i32.and
+          (ref.test (ref $Number) (local.get $arg1))
+          (ref.test (ref $Number) (local.get $arg2)))
+      (then
+        (local.set $num1 (ref.cast (ref $Number) (local.get $arg1)))
+        (local.set $num2 (ref.cast (ref $Number) (local.get $arg2)))
+        (local.set $result
+          (f64.add
+            (struct.get $Number 0 (local.get $num1))
+            (struct.get $Number 0 (local.get $num2))
+          )
+        )
+        (return (call $new_number (local.get $result)))
       )
     )
-    (return (call $new_number (local.get $result)))
+
+    (if (i32.and
+          (ref.test (ref $StaticString) (local.get $arg1))
+          (ref.test (ref $StaticString) (local.get $arg2)))
+      (then
+        (local.set $static_str1 (ref.cast (ref $StaticString) (local.get $arg1)))
+        (local.set $static_str2 (ref.cast (ref $StaticString) (local.get $arg2)))
+
+        (call $add_static_strings
+          (struct.get $StaticString $offset (local.get $static_str1))
+          (struct.get $StaticString $length (local.get $static_str1))
+          (struct.get $StaticString $offset (local.get $static_str2))
+          (struct.get $StaticString $length (local.get $static_str2))
+        )
+        (return)
+      )
+    )
+
+    (if (i32.and
+          (ref.test (ref $String) (local.get $arg1))
+          (ref.test (ref $StaticString) (local.get $arg2)))
+      (then
+        (local.set $str1 (ref.cast (ref $String) (local.get $arg1)))
+        (local.set $static_str2 (ref.cast (ref $StaticString) (local.get $arg2)))
+
+        (call $add_static_string_to_string
+          (local.get $str1)
+          (struct.get $StaticString $offset (local.get $static_str2))
+          (struct.get $StaticString $length (local.get $static_str2))
+        )
+        (return)
+      )
+    )
+
+    (ref.null any)
+  )
+
+  (func $div (param $arg1 anyref) (param $arg2 anyref) (result anyref)
+    (local $num1 (ref $Number))
+    (local $num2 (ref $Number))
+    (local $result f64)
+
+    (if (i32.and
+          (ref.test (ref $Number) (local.get $arg1))
+          (ref.test (ref $Number) (local.get $arg2)))
+      (then
+        (local.set $num1 (ref.cast (ref $Number) (local.get $arg1)))
+        (local.set $num2 (ref.cast (ref $Number) (local.get $arg2)))
+        (local.set $result
+          (f64.div
+            (struct.get $Number 0 (local.get $num1))
+            (struct.get $Number 0 (local.get $num2))
+          )
+        )
+        (return (call $new_number (local.get $result)))
+      )
+    )
+    (ref.null any)
   )
 
   (func $sub (param $arg1 anyref) (param $arg2 anyref) (result anyref)
@@ -380,6 +615,7 @@
               (call $strict_equal (local.get $arg1) (local.get $arg2))))))
     )
   )
+
   (func $strict_equal (param $arg1 anyref) (param $arg2 anyref) (result i31ref)
     (local $num1 (ref $Number))
     (local $num2 (ref $Number))
@@ -421,6 +657,131 @@
     )
 
     (ref.i31 (i32.const 0))
+  )
+
+  (func $logical_or (param $arg1 anyref) (param $arg2 anyref) (result anyref)
+    (local $arg1_is_false_or_null i32)
+    (local.set $arg1_is_false_or_null (i32.const 0))
+    (if (ref.test i31ref (local.get $arg1))
+      (then
+        (if (i32.or
+              (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg1))) (i32.const 0))
+              (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg1))) (i32.const 2)))
+          (then
+            (local.set $arg1_is_false_or_null (i32.const 1))
+          )
+        )
+      )
+    )
+
+    (if (i32.eqz
+          (i32.or
+            (local.get $arg1_is_false_or_null)
+            (ref.test nullref (local.get $arg1))))
+      (then
+        ;; if arg1 is not (false or null or undefined) we return arg1
+        (return (local.get $arg1))
+      )
+    )
+
+    ;; otherwise we return arg2
+    (return (local.get $arg2))
+  )
+
+  (func $logical_and (param $arg1 anyref) (param $arg2 anyref) (result anyref)
+    (local $arg1_is_false_or_null i32)
+    (local.set $arg1_is_false_or_null (i32.const 0))
+    (if (ref.test i31ref (local.get $arg1))
+      (then
+        (if (i32.or
+              (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg1))) (i32.const 0))
+              (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg1))) (i32.const 2)))
+          (then
+            (local.set $arg1_is_false_or_null (i32.const 1))
+          )
+        )
+      )
+    )
+
+    (if (i32.or
+          (local.get $arg1_is_false_or_null)
+          (ref.test nullref (local.get $arg1)))
+      (then
+        ;; if arg1 is (false or null or undefined) we return arg1
+        (return (local.get $arg1))
+      )
+    )
+
+    ;; otherwise we return arg2
+    (return (local.get $arg2))
+
+  )
+
+  (func $logical_not (param $arg anyref) (result i31ref)
+    (local $arg_is_false_or_null i32)
+    (local.set $arg_is_false_or_null (i32.const 0))
+    (if (ref.test i31ref (local.get $arg))
+      (then
+        (if (i32.or
+              (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg))) (i32.const 0))
+              (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg))) (i32.const 2)))
+          (then
+            (local.set $arg_is_false_or_null (i32.const 1))
+          )
+        )
+      )
+    )
+
+    (if (i32.or
+          (local.get $arg_is_false_or_null)
+          (ref.test nullref (local.get $arg)))
+      (then
+        ;; if arg is (false or null or undefined) we return true
+        (return (ref.i31 (i32.const 1)))
+      )
+    )
+
+    ;; otherwise we return false
+    (return (ref.i31 (i32.const 0)))
+  )
+
+  (func $type_of (param $arg anyref) (result (ref $StaticString))
+    (if (ref.test i31ref (local.get $arg))
+      (then
+        (if (i32.or
+              (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg))) (i32.const 0))
+              (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg))) (i32.const 1)))
+          (then
+            (return (call $new_static_string (i32.const 220) (i32.const 7)))
+          )
+          (else
+            (return (call $new_static_string (i32.const 200) (i32.const 9)))
+          )
+        )
+      )
+    )
+
+    (if (ref.test (ref $Number) (local.get $arg))
+      (then
+        (return (call $new_static_string (i32.const 228) (i32.const 6))))
+    )
+
+    (if (ref.test (ref $Object) (local.get $arg))
+      (then
+        (return (call $new_static_string (i32.const 212) (i32.const 6))))
+    )
+
+    (if (ref.test (ref $StaticString) (local.get $arg))
+      (then
+        (return (call $new_static_string (i32.const 244) (i32.const 6))))
+    )
+
+    (if (ref.test (ref $Function) (local.get $arg))
+      (then
+        (return (call $new_static_string (i32.const 260) (i32.const 8))))
+    )
+
+    (return (call $new_static_string (i32.const 200) (i32.const 9)))
   )
 
   (func $less_than (param $arg1 anyref) (param $arg2 anyref) (result i31ref)
@@ -683,13 +1044,16 @@
 
   (func $log (param $arguments (ref null $JSArgs))
     (local $i i32)                    ;; loop counter
+    (local $j i32)                    ;; loop counter
     (local $len i32)                  ;; length of arguments array
+    (local $str_len i32)              ;; length of a processed sring
     (local $current anyref)           ;; current argument being processed
     (local $offset i32)               ;; current memory offset for data
     (local $iovectors_offset i32)     ;; offset for iovectors
     (local $written_length i32)       ;; length of written data
     (local $num_val f64)              ;; temporary storage for number value
-    (local $str_ref (ref $StaticString))  ;; temporary storage for string reference
+    (local $static_str_ref (ref $StaticString))  ;; temporary storage for string reference
+    (local $str_ref (ref $String))  ;; temporary storage for string reference
     (local $num_ref (ref $Number))    ;; temporary storage for number reference
     (local $handled i32)
  
@@ -772,25 +1136,76 @@
         (if (ref.test (ref $StaticString) (local.get $current))
           (then
             ;; Cast to StaticString
-            (local.set $str_ref 
+            (local.set $static_str_ref
               (ref.cast (ref $StaticString) (local.get $current))
             )
             
             ;; Store iovector data
             (i32.store 
               (local.get $iovectors_offset)
-              (struct.get $StaticString $offset (local.get $str_ref))
+              (struct.get $StaticString $offset (local.get $static_str_ref))
             )
             (i32.store 
               (i32.add (local.get $iovectors_offset) (i32.const 4))
-              (struct.get $StaticString $length (local.get $str_ref))
+              (struct.get $StaticString $length (local.get $static_str_ref))
+            )
+            
+            ;; Update offset for next write
+            ;;(local.set $offset 
+            ;;  (i32.add 
+            ;;    (local.get $offset)
+            ;;    (struct.get $StaticString $length (local.get $static_str_ref))
+            ;;  )
+            ;;)
+            (local.set $iovectors_offset 
+              (i32.add (local.get $iovectors_offset) (i32.const 8))
+            )
+    
+            ;; argument handled
+            (local.set $handled (i32.const 1))
+          )
+        )
+
+        ;; Check if it's a String
+        (if (ref.test (ref $String) (local.get $current))
+          (then
+            (local.set $str_ref 
+              (ref.cast (ref $String) (local.get $current))
+            )
+            
+            (local.set $str_len (struct.get $String $length (local.get $str_ref)))
+            ;; Store iovector data
+            (i32.store 
+              (local.get $iovectors_offset)
+              (local.get $offset)
+            )
+            (i32.store 
+              (i32.add (local.get $iovectors_offset) (i32.const 4))
+              (local.get $str_len)
+            )
+            (local.set $j (i32.const 0))
+            (block $break1
+              (loop $copy1
+                (br_if $break1 (i32.ge_u (local.get $j) (local.get $str_len)))
+
+                (i32.store8 
+                  (i32.add (local.get $offset) (local.get $j))
+                  (array.get_u $CharArray 
+                    (struct.get $String $data (local.get $str_ref))
+                    (local.get $j)
+                  )
+                )
+                
+                (local.set $j (i32.add (local.get $j) (i32.const 1)))
+                (br $copy1)
+              )
             )
             
             ;; Update offset for next write
             (local.set $offset 
               (i32.add 
                 (local.get $offset)
-                (struct.get $StaticString $length (local.get $str_ref))
+                (struct.get $String $length (local.get $str_ref))
               )
             )
             (local.set $iovectors_offset 

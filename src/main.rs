@@ -2,9 +2,9 @@ use boa_ast::{
     declaration::{Declaration, LexicalDeclaration, VarDeclaration, VariableList},
     expression::{
         access::PropertyAccess,
-        literal::Literal,
+        literal::{Literal, ObjectLiteral},
         operator::{
-            binary::{ArithmeticOp, BinaryOp},
+            binary::{ArithmeticOp, BinaryOp, LogicalOp},
             update::UpdateTarget,
             Assign, Binary, Unary, Update,
         },
@@ -15,7 +15,7 @@ use boa_ast::{
     visitor::{VisitWith, Visitor},
     StatementListItem,
 };
-use boa_interner::{Interner, Sym, ToInternedString};
+use boa_interner::{Interner, JStrRef, Sym, ToInternedString};
 use boa_parser::{Parser, Source};
 use rand::{distributions::Alphanumeric, Rng};
 use std::{
@@ -49,7 +49,7 @@ struct WasmTranslator {
     interner: Interner,
     functions: HashMap<String, String>,
     init_code: Vec<String>,
-    data_entries: Vec<String>,
+    data_entries: HashMap<i32, String>,
     data_offset: i32,
     identifiers_map: HashMap<i32, i32>,
     current_block_number: u32,
@@ -65,32 +65,29 @@ impl WasmTranslator {
             interner,
             functions: HashMap::new(),
             init_code: Vec::new(),
-            data_entries: Vec::new(),
-            data_offset: 200,
+            data_entries: HashMap::new(),
+            data_offset: 268,
             identifiers_map: HashMap::new(),
             current_block_number: 0,
         }
     }
 
-    fn add_symbol(&mut self, identifier: Sym, value: &str) -> i32 {
-        println!(
-            "symbol: {}, JS: {}",
-            identifier.get(),
-            self.interner.resolve(identifier).unwrap()
-        );
-        if let Some(offset) = self.identifiers_map.get(&(identifier.get() as i32)) {
+    fn add_new_symbol(&mut self, sym: Sym, value: &str) -> i32 {
+        if let Some(offset) = self.identifiers_map.get(&(sym.get() as i32)) {
             *offset
         } else {
             let (offset, _) = self.insert_data_string(value);
-            self.identifiers_map.insert(identifier.get() as i32, offset);
+            self.identifiers_map.insert(sym.get() as i32, offset);
             offset
         }
     }
+
+    fn add_symbol(&mut self, sym: Sym) -> i32 {
+        self.add_new_symbol(sym, &self.interner.resolve(sym).unwrap().to_string())
+    }
+
     fn add_identifier(&mut self, identifier: &Identifier) -> i32 {
-        self.add_symbol(
-            identifier.sym(),
-            &self.interner.resolve(identifier.sym()).unwrap().to_string(),
-        )
+        self.add_symbol(identifier.sym())
     }
 
     fn current_function(&mut self) -> &mut WatFunction {
@@ -122,7 +119,7 @@ impl WasmTranslator {
         // println!("Return: {ret:#?}");
         let mut instructions = Vec::new();
         if let Some(target) = ret.target() {
-            instructions.push(self.translate_expression(target));
+            instructions.push(self.translate_expression(target, true));
         } else {
             instructions.push(W::ref_null("any"));
         }
@@ -236,7 +233,7 @@ impl WasmTranslator {
         self.translate_let_vars(&decl.0)
     }
 
-    fn translate_call(&mut self, call: &Call, get_this: Box<W>) -> Box<W> {
+    fn translate_call(&mut self, call: &Call, get_this: Box<W>, will_use_return: bool) -> Box<W> {
         // println!(
         //     "translate_call {}",
         //     call.function().to_interned_string(&self.interner)
@@ -260,7 +257,7 @@ impl WasmTranslator {
 
         // Populate the arguments array
         for (index, arg) in call.args().iter().enumerate() {
-            let arg_instruction = self.translate_expression(arg);
+            let arg_instruction = self.translate_expression(arg, true);
             instructions.push(W::list(vec![
                 arg_instruction,
                 W::local_set("$temp_arg"),
@@ -281,12 +278,13 @@ impl WasmTranslator {
                 "$log",
                 vec![W::local_get("$call_arguments".to_string())],
             ));
+            instructions.push(W::i32_const(1));
         } else {
             // Translate the function expression
             self.current_function()
                 .locals
                 .insert(("$function".to_string(), "anyref".to_string()));
-            instructions.push(self.translate_expression(call.function()));
+            instructions.push(self.translate_expression(call.function(), true));
             instructions.push(W::local_set("$function"));
 
             // Call the function
@@ -301,6 +299,9 @@ impl WasmTranslator {
             ));
         }
 
+        if !will_use_return {
+            instructions.push(W::drop());
+        }
         W::list(instructions)
     }
 
@@ -318,7 +319,7 @@ impl WasmTranslator {
                     Binding::Identifier(identifier) => {
                         let offset = self.add_identifier(&identifier);
 
-                        instructions.push(self.translate_expression(expression));
+                        instructions.push(self.translate_expression(expression, true));
                         instructions.push(W::local_set("$var"));
 
                         instructions.push(W::local_get("$scope"));
@@ -350,8 +351,8 @@ impl WasmTranslator {
                 };
                 // TODO: this will probably need translating to
                 // multiple lines and saving to local vars
-                let lhs = self.translate_expression(binary.lhs());
-                let rhs = self.translate_expression(binary.rhs());
+                let lhs = self.translate_expression(binary.lhs(), true);
+                let rhs = self.translate_expression(binary.rhs(), true);
                 W::call(func.to_string(), vec![lhs, rhs])
             }
             BinaryOp::Bitwise(_bitwise_op) => todo!(),
@@ -368,22 +369,32 @@ impl WasmTranslator {
                     RelationalOp::In => todo!(),
                     RelationalOp::InstanceOf => todo!(),
                 };
-                self.current_function()
-                    .locals
-                    .insert(("$lhs".to_string(), "anyref".to_string()));
-                self.current_function()
-                    .locals
-                    .insert(("$rhs".to_string(), "anyref".to_string()));
+                self.current_function().add_local("$rhs_anyref", "anyref");
 
                 W::list(vec![
-                    self.translate_expression(binary.rhs()),
-                    W::local_set("$rhs"),
-                    self.translate_expression(binary.lhs()),
-                    W::local_get("$rhs"),
+                    self.translate_expression(binary.rhs(), true),
+                    W::local_set("$rhs_anyref"),
+                    self.translate_expression(binary.lhs(), true),
+                    W::local_get("$rhs_anyref"),
                     W::call(func_name, vec![]),
                 ])
             }
-            BinaryOp::Logical(_logical_op) => todo!(),
+            BinaryOp::Logical(logical_op) => {
+                let func_name = match logical_op {
+                    LogicalOp::And => "$logical_and",
+                    LogicalOp::Or => "$logical_or",
+                    LogicalOp::Coalesce => "$logical_coalesce",
+                };
+                self.current_function().add_local("$rhs_anyref", "anyref");
+
+                W::list(vec![
+                    self.translate_expression(binary.rhs(), true),
+                    W::local_set("$rhs_anyref"),
+                    self.translate_expression(binary.lhs(), true),
+                    W::local_get("$rhs_anyref"),
+                    W::call(func_name, vec![]),
+                ])
+            }
             BinaryOp::Comma => todo!(),
         }
     }
@@ -408,15 +419,15 @@ impl WasmTranslator {
     ) -> Box<W> {
         use boa_ast::expression::access::PropertyAccessField;
 
-        println!("Property access: {:#?}", property_access);
+        // println!("Property access: {:#?}", property_access);
 
         match property_access {
             PropertyAccess::Simple(simple_property_access) => {
-                let target = self.translate_expression(simple_property_access.target());
+                let target = self.translate_expression(simple_property_access.target(), true);
+                // println!("TARGET: {target:#?}");
                 match simple_property_access.field() {
                     PropertyAccessField::Const(sym) => {
-                        let field = self.interner.resolve(*sym).unwrap().to_string();
-                        let offset = self.add_symbol(*sym, &field);
+                        let offset = self.add_symbol(*sym);
                         // self.current_function().add_local("$target", "anyref");
 
                         if let Some(assign_instruction) = assign {
@@ -445,18 +456,27 @@ impl WasmTranslator {
         }
     }
 
-    fn translate_expression(&mut self, expression: &Expression) -> Box<W> {
-        println!(
-            "translate expression {}",
-            expression.to_interned_string(&self.interner)
-        );
+    fn translate_expression(&mut self, expression: &Expression, will_use_return: bool) -> Box<W> {
+        // println!(
+        //     "translate expression ({will_use_return}) {} {expression:#?}",
+        //     expression.to_interned_string(&self.interner)
+        // );
         match expression {
             Expression::This => W::local_get("$this"),
-            Expression::Identifier(identifier) => self.translate_identifier(identifier),
+            Expression::Identifier(identifier) => {
+                let instr = self.translate_identifier(identifier);
+                if !will_use_return {
+                    W::list(vec![instr, W::drop()])
+                } else {
+                    instr
+                }
+            }
             Expression::Literal(literal) => self.translate_literal(literal),
             Expression::RegExpLiteral(_reg_exp_literal) => todo!(),
             Expression::ArrayLiteral(_array_literal) => todo!(),
-            Expression::ObjectLiteral(_object_literal) => todo!(),
+            Expression::ObjectLiteral(object_literal) => {
+                self.translate_object_literal(object_literal, will_use_return)
+            }
             Expression::Spread(_spread) => todo!(),
             Expression::Function(function) => self.translate_function(function),
             Expression::ArrowFunction(arrow_function) => {
@@ -473,7 +493,9 @@ impl WasmTranslator {
             }
             Expression::New(new) => self.translate_new(new),
             // TODO: the default this value is a global object
-            Expression::Call(call) => self.translate_call(call, W::ref_null("any")),
+            Expression::Call(call) => {
+                self.translate_call(call, W::ref_null("any"), will_use_return)
+            }
             Expression::SuperCall(_super_call) => todo!(),
             Expression::ImportCall(_import_call) => todo!(),
             Expression::Optional(_optional) => todo!(),
@@ -493,13 +515,91 @@ impl WasmTranslator {
         }
     }
 
+    fn translate_object_literal(
+        &mut self,
+        object_literal: &ObjectLiteral,
+        will_use_return: bool,
+    ) -> Box<W> {
+        use boa_ast::property::{PropertyDefinition, PropertyName};
+
+        let mut instructions = Vec::new();
+        self.current_function()
+            .add_local("$new_instance", "(ref $Object)");
+        self.current_function().add_local("$temp_anyref", "anyref");
+        instructions.push(W::call("$new_object", vec![]));
+        instructions.push(W::local_set("$new_instance"));
+        for property in object_literal.properties() {
+            let instr = match property {
+                PropertyDefinition::IdentifierReference(identifier) => {
+                    let offset = self.add_identifier(identifier);
+                    W::list(vec![
+                        self.translate_identifier(identifier),
+                        W::local_set("$temp_anyref"),
+                        W::local_get("$new_instance"),
+                        W::i32_const(offset),
+                        W::local_get("$temp_anyref"),
+                        W::call("$set_property", vec![]),
+                    ])
+                }
+                PropertyDefinition::Property(property_name, expression) => match property_name {
+                    PropertyName::Literal(sym) => {
+                        let offset = self.add_symbol(*sym);
+                        W::list(vec![
+                            self.translate_expression(expression, true),
+                            W::local_set("$temp_anyref"),
+                            W::local_get("$new_instance"),
+                            W::i32_const(offset),
+                            W::local_get("$temp_anyref"),
+                            W::call("$set_property", vec![]),
+                        ])
+                    }
+                    PropertyName::Computed(_) => todo!(),
+                },
+                PropertyDefinition::MethodDefinition(property_name, method_definition) => {
+                    match property_name {
+                        PropertyName::Literal(sym) => {
+                            let offset = self.add_symbol(*sym);
+                            let func_instr = match method_definition {
+                                boa_ast::property::MethodDefinition::Get(_) => todo!(),
+                                boa_ast::property::MethodDefinition::Set(_) => todo!(),
+                                boa_ast::property::MethodDefinition::Ordinary(function) => {
+                                    self.translate_function(function)
+                                }
+                                boa_ast::property::MethodDefinition::Generator(_) => todo!(),
+                                boa_ast::property::MethodDefinition::AsyncGenerator(_) => todo!(),
+                                boa_ast::property::MethodDefinition::Async(_) => todo!(),
+                            };
+                            W::list(vec![
+                                func_instr,
+                                W::local_set("$temp_anyref"),
+                                W::local_get("$new_instance"),
+                                W::i32_const(offset),
+                                W::local_get("$temp_anyref"),
+                                W::call("$set_property", vec![]),
+                            ])
+                        }
+                        PropertyName::Computed(_) => todo!(),
+                    }
+                }
+                PropertyDefinition::SpreadObject(_) => todo!(),
+                PropertyDefinition::CoverInitializedName(_, _) => todo!(),
+            };
+            instructions.push(instr);
+        }
+
+        if will_use_return {
+            instructions.push(W::local_get("$temp_anyref"));
+        }
+        W::list(instructions)
+    }
+
     fn translate_new(&mut self, new: &New) -> Box<W> {
         self.current_function()
             .add_local("$new_instance", "(ref $Object)");
         W::list(vec![
             W::call("$new_object", vec![]),
             W::local_set("$new_instance"),
-            self.translate_call(new.call(), W::local_get("$new_instance")),
+            self.translate_call(new.call(), W::local_get("$new_instance"), true),
             W::drop(),
             // TODO: we return the created instance, but it's not always the case
             // in JS. If the returned value is an object, we should return the returned
@@ -552,26 +652,23 @@ impl WasmTranslator {
         use boa_ast::expression::operator::assign::AssignOp;
         use boa_ast::expression::operator::assign::AssignTarget;
 
-        // println!("assign: {:#?}", assign);
         match assign.op() {
             AssignOp::Assign => {
-                let rhs = self.translate_expression(assign.rhs());
+                let rhs = self.translate_expression(assign.rhs(), true);
                 match assign.lhs() {
                     AssignTarget::Identifier(identifier) => {
                         let offset = self.add_identifier(identifier);
                         // identifier.sym().get(),
-                        self.current_function()
-                            .locals
-                            .insert(("$rhs".to_string(), "anyref".to_string()));
+                        self.current_function().add_local("$rhs_anyref", "anyref");
                         W::list(vec![
                             rhs,
-                            W::local_set("$rhs"),
+                            W::local_set("$rhs_anyref"),
                             W::call(
                                 "$set_variable".to_string(),
                                 vec![
                                     W::local_get("$scope".to_string()),
                                     W::i32_const(offset),
-                                    W::local_get("$rhs"),
+                                    W::local_get("$rhs_anyref"),
                                 ],
                             ),
                         ])
@@ -582,7 +679,10 @@ impl WasmTranslator {
                     AssignTarget::Pattern(_pattern) => todo!(),
                 }
             }
-            AssignOp::Add => todo!(),
+            AssignOp::Add => {
+                // println!("assign op: {assign:#?}");
+                todo!()
+            }
             AssignOp::Sub => todo!(),
             AssignOp::Mul => todo!(),
             AssignOp::Div => todo!(),
@@ -601,13 +701,22 @@ impl WasmTranslator {
     }
 
     fn translate_unary(&mut self, unary: &Unary) -> Box<W> {
-        println!("unary: {:#?}", unary);
+        use boa_ast::expression::operator::unary::UnaryOp;
 
-        W::empty()
+        let target = self.translate_expression(unary.target(), true);
+        match unary.op() {
+            UnaryOp::Minus => todo!(),
+            UnaryOp::Plus => todo!(),
+            UnaryOp::Not => W::list(vec![target, W::call("$logical_not", vec![])]),
+            UnaryOp::Tilde => todo!(),
+            UnaryOp::TypeOf => W::list(vec![target, W::call("$type_of", vec![])]),
+            UnaryOp::Delete => todo!(),
+            UnaryOp::Void => todo!(),
+        }
     }
 
     fn translate_literal(&mut self, lit: &Literal) -> Box<W> {
-        println!("translate_literal: {lit:#?}");
+        // println!("translate_literal: {lit:#?}");
         match lit {
             Literal::Num(num) => W::call("$new_number", vec![W::f64_const(*num)]),
             Literal::String(s) => {
@@ -615,7 +724,7 @@ impl WasmTranslator {
                 let (offset, length) = self.insert_data_string(&s);
 
                 W::call(
-                    "$new_string",
+                    "$new_static_string",
                     vec![W::i32_const(offset), W::i32_const(length)],
                 )
             }
@@ -656,15 +765,28 @@ impl WasmTranslator {
     }
 
     fn data(&self) -> String {
-        self.data_entries.join("\n")
+        // self.data_entries.join("\n")
+        self.data_entries
+            .iter()
+            .map(|(offset, value)| {
+                format!(
+                    "(data $d{offset} (i32.const {offset}) \"{value}\")",
+                    offset = offset,
+                    value = value
+                )
+            })
+            .collect()
     }
 
-    // TODO: we can save some space by checking if a string already exists
+    fn additional_functions(&self) -> String {
+        "".into()
+    }
+
     fn insert_data_string(&mut self, s: &str) -> (i32, i32) {
+        let value = s.replace("\"", "\\\"");
+        let len = value.len() as i32;
         let offset = self.data_offset;
-        self.data_entries
-            .push(format!("(data (i32.const {offset}) \"{s}\")"));
-        let len = s.len() as i32;
+        self.data_entries.insert(offset, value);
         self.data_offset += if len % 4 == 0 {
             len
         } else {
@@ -679,8 +801,8 @@ impl WasmTranslator {
         match statement {
             Statement::Block(block) => self.translate_block(block),
             Statement::Var(var_declaration) => self.translate_let(var_declaration),
-            Statement::Empty => todo!(),
-            Statement::Expression(expression) => self.translate_expression(expression),
+            Statement::Empty => W::empty(),
+            Statement::Expression(expression) => self.translate_expression(expression, false),
             Statement::If(if_statement) => self.translate_if_statement(if_statement),
             Statement::DoWhileLoop(_do_while_loop) => todo!(),
             Statement::WhileLoop(while_loop) => self.translate_while_loop(while_loop),
@@ -748,13 +870,13 @@ impl WasmTranslator {
     }
 
     fn translate_throw(&mut self, throw: &Throw) -> Box<W> {
-        let target = self.translate_expression(throw.target());
+        let target = self.translate_expression(throw.target(), true);
         W::list(vec![target, W::throw("$JSException")])
     }
 
     fn translate_if_statement(&mut self, if_statement: &If) -> Box<W> {
         W::list(vec![
-            self.translate_expression(if_statement.cond()),
+            self.translate_expression(if_statement.cond(), true),
             W::call("$cast_ref_to_i32_bool", vec![]),
             W::r#if(
                 None,
@@ -767,10 +889,7 @@ impl WasmTranslator {
     }
 
     fn translate_while_loop(&mut self, while_loop: &WhileLoop) -> Box<W> {
-        println!("condition: {:#?}", while_loop.condition());
-        let condition = self.translate_expression(while_loop.condition());
-        println!("while_loop: {while_loop:#?}");
-        println!("condition: {condition:#?}");
+        let condition = self.translate_expression(while_loop.condition(), true);
         W::r#loop(
             "$while_loop".to_string(),
             vec![W::block(
@@ -815,41 +934,47 @@ impl<'a> Visitor<'a> for WasmTranslator {
     type BreakTy = ();
 
     fn visit_var_declaration(&mut self, node: &'a VarDeclaration) -> ControlFlow<Self::BreakTy> {
-        println!(
-            "visit_var_declaration: {}",
-            node.to_interned_string(&self.interner)
-        );
+        // println!(
+        //     "visit_var_declaration: {}",
+        //     node.to_interned_string(&self.interner)
+        // );
         let instruction = self.translate_let(node);
         self.current_function().add_instruction(instruction);
         ControlFlow::Continue(())
     }
 
     fn visit_declaration(&mut self, node: &Declaration) -> ControlFlow<Self::BreakTy> {
-        println!(
-            "visit_declaration: {}",
-            node.to_interned_string(&self.interner)
-        );
+        // println!(
+        //     "visit_declaration: {}",
+        //     node.to_interned_string(&self.interner)
+        // );
         let instruction = self.translate_declaration(node);
         self.current_function().add_instruction(instruction);
         ControlFlow::Continue(())
     }
 
     fn visit_expression(&mut self, node: &Expression) -> ControlFlow<Self::BreakTy> {
-        println!(
-            "visit_expression: {}",
-            node.to_interned_string(&self.interner)
-        );
-        let instruction = self.translate_expression(node);
+        // println!(
+        //     "visit_expression: {}",
+        //     node.to_interned_string(&self.interner)
+        // );
+        let instruction = self.translate_expression(node, false);
         self.current_function().add_instruction(instruction);
         ControlFlow::Continue(())
     }
 
     fn visit_statement(&mut self, node: &'a Statement) -> ControlFlow<Self::BreakTy> {
-        println!(
-            "visit_statement: {}",
-            node.to_interned_string(&self.interner)
-        );
+        // println!(
+        //     "visit_statement: {}",
+        //     node.to_interned_string(&self.interner)
+        // );
         let instruction = self.translate_statement(node);
+        self.current_function().add_instruction(instruction);
+        ControlFlow::Continue(())
+    }
+
+    fn visit_call(&mut self, node: &'a Call) -> ControlFlow<Self::BreakTy> {
+        let instruction = self.translate_call(node, W::ref_null("any"), false);
         self.current_function().add_instruction(instruction);
         ControlFlow::Continue(())
     }
@@ -860,10 +985,34 @@ fn main() -> io::Result<()> {
     io::stdin().read_to_string(&mut js_code)?;
 
     let mut interner = Interner::default();
-    let mut parser = Parser::new(Source::from_bytes(&js_code));
+
+    let js_include = include_str!("js/prepend.js");
+    let full = format!("{js_include}\n{js_code}");
+
+    let mut parser = Parser::new(Source::from_bytes(&full));
     let ast = parser.parse_script(&mut interner).unwrap();
+    //println!("{ast:#?}");
 
     let mut translator = WasmTranslator::new(interner);
+    for type_of_value in [
+        "undefined",
+        "object",
+        "boolean",
+        "number",
+        "bigint",
+        "string",
+        "symbol",
+        "function",
+        "object",
+    ]
+    .iter()
+    {
+        let sym = translator
+            .interner
+            .get_or_intern(JStrRef::Utf8(type_of_value));
+        translator.add_symbol(sym);
+    }
+
     ast.visit_with(&mut translator);
     // exit $init function
     translator.exit_function();
@@ -880,15 +1029,15 @@ fn main() -> io::Result<()> {
 
     // Generate the full WAT module using the template
     let module = wat_template::generate_wat_template(
-        &translator.functions,
-        &module,
-        &translator.data(),
+        translator.additional_functions(),
+        module,
+        translator.data(),
         translator.data_offset + (4 - translator.data_offset % 4),
     );
 
     let mut f = File::create("wat/generated.wat").unwrap();
     f.write_all(module.as_bytes()).unwrap();
 
-    println!("WAT modules generated successfully!");
+    //println!("WAT modules generated successfully!");
     Ok(())
 }

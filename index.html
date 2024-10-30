@@ -50,7 +50,7 @@
         (async function() {
         // Load and instantiate the WebAssembly module
         // let response = await fetch('tests/ref-cast.wasm');
-        let response = await fetch('wasm/exception_handling.wasm');
+        let response = await fetch('wasm/generated.wasm');
         let bytes = await response.arrayBuffer();
         let compiled = await WebAssembly.compile(bytes, { builtins: ['js-string'] });
         instance = await WebAssembly.instantiate(compiled, importObject)
