@@ -369,7 +369,8 @@ pub struct WatFunction {
     pub name: String,
     pub params: Vec<(String, String)>,
     pub results: Vec<String>,
-    pub locals: HashSet<(String, String)>,
+    pub locals: HashMap<String, String>,
+    pub locals_counters: HashMap<String, u32>,
     pub body: VecDeque<Box<WatInstruction>>,
 }
 
@@ -379,7 +380,8 @@ impl WatFunction {
             name,
             params: Vec::new(),
             results: Vec::new(),
-            locals: HashSet::new(),
+            locals: HashMap::new(),
+            locals_counters: HashMap::new(),
             body: VecDeque::new(),
         }
     }
@@ -392,8 +394,20 @@ impl WatFunction {
         self.results.push(type_);
     }
 
-    pub fn add_local(&mut self, name: impl Into<String>, r#type: impl Into<String>) {
-        self.locals.insert((name.into(), r#type.into()));
+    pub fn add_local_exact(&mut self, name: impl Into<String>, r#type: impl Into<String>) {
+        self.locals.insert(name.into(), r#type.into());
+    }
+
+    pub fn add_local(&mut self, name: impl Into<String>, r#type: impl Into<String>) -> String {
+        let r#type = r#type.into();
+        let name = name.into();
+
+        let counter = self.locals_counters.entry(name.clone()).or_insert(0);
+        *counter += 1;
+        let name = format!("{name}-{counter}");
+        self.locals.insert(name.clone(), r#type);
+
+        return name;
     }
 
     pub fn add_instruction(&mut self, instruction: Box<WatInstruction>) {

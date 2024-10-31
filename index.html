@@ -26,6 +26,9 @@
 
           console: { log: (value) => log(`WebAssembly log: ${value}`) },
           "wasi_snapshot_preview1": {
+            proc_exit(code) {
+              console.log("exit code: ", code);
+            },
             fd_write(fd, iovsPtr, iovsLength, bytesWrittenPtr){
     const iovs = new Uint32Array(instance.exports.memory.buffer, iovsPtr, iovsLength * 2);
     if(fd === 1) { //stdout

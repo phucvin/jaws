@@ -3,6 +3,7 @@
   (type (func (param anyref)))
   (type $write_type (func (param i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_write" (func $write (type $write_type)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
 
   ;; 64KB
   (memory (export "memory") 1)
@@ -18,6 +19,7 @@
   ;; i31ref 2 - null
   ;; null     - undefined
 
+  (data (i32.const 172) "error encountered")
   ;; define new line in memory
   (data (i32.const 192) "\n")
   ;; define empty string in memory
@@ -30,6 +32,9 @@
   (data (i32.const 244) "string")
   (data (i32.const 252) "symbol")
   (data (i32.const 260) "function")
+  (data (i32.const 268) "null")
+  (data (i32.const 272) "true")
+  (data (i32.const 276) "false")
 
   {data}
 
@@ -322,7 +327,7 @@
           (local.set $current_scope (struct.get $Scope $parent (local.get $current_scope)))
           (if (ref.is_null (local.get $current_scope))
             (then
-              (throw $JSException (ref.i31 (i32.const 103)))
+              (throw $JSException (ref.i31 (local.get $name)))
             )
           )
  
@@ -621,6 +626,24 @@
     (local $num2 (ref $Number))
     (local $result f64)
 
+    ;; if both args are undefined, return true
+    (if (i32.and
+          (ref.test nullref (local.get $arg1))
+          (ref.test nullref (local.get $arg2)))
+      (then
+        (return (ref.i31 (i32.const 1)))
+      )
+    )
+
+    ;; if one value is undefined, return false
+    (if (i32.or
+          (ref.test nullref (local.get $arg1))
+          (ref.test nullref (local.get $arg2)))
+      (then
+        (return (ref.i31 (i32.const 0)))
+      )
+    )
+
     (if (i32.and
           (ref.test (ref $Number) (local.get $arg1))
           (ref.test (ref $Number) (local.get $arg2)))
@@ -636,23 +659,12 @@
       )
     )
 
-    ;; if both args are null, return true
-    (if (i32.and
-          (ref.test nullref (local.get $arg1))
-          (ref.test nullref (local.get $arg1)))
-      (then
-        (return (ref.i31 (i32.const 1)))
-      )
-    )
     ;; if both args are bool or null and are equal, return true
     (if (i32.and
           (ref.test i31ref (local.get $arg1))
           (ref.test i31ref (local.get $arg2)))
       (then
-        (return (ref.i31 (i32.eq
-          (i31.get_s (ref.cast (ref null i31) (local.get $arg1)))
-          (i31.get_s (ref.cast (ref null i31) (local.get $arg2)))
-        )))
+        (return (ref.i31 (i32.const 1)))
       )
     )
 
@@ -660,27 +672,23 @@
   )
 
   (func $logical_or (param $arg1 anyref) (param $arg2 anyref) (result anyref)
-    (local $arg1_is_false_or_null i32)
-    (local.set $arg1_is_false_or_null (i32.const 0))
-    (if (ref.test i31ref (local.get $arg1))
+    (if (i32.eqz (ref.test nullref (local.get $arg1)))
       (then
-        (if (i32.or
-              (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg1))) (i32.const 0))
-              (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg1))) (i32.const 2)))
-          (then
-            (local.set $arg1_is_false_or_null (i32.const 1))
-          )
-        )
+        ;; if arg1 is not undefined we return arg1
+        (return (local.get $arg1))
       )
     )
 
-    (if (i32.eqz
-          (i32.or
-            (local.get $arg1_is_false_or_null)
-            (ref.test nullref (local.get $arg1))))
+    ;; if arg1 is not (null or false) we also return arg1
+    (if (ref.test i31ref (local.get $arg1))
       (then
-        ;; if arg1 is not (false or null or undefined) we return arg1
-        (return (local.get $arg1))
+        (if (i32.eqz (i32.or
+              (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg1))) (i32.const 0))
+              (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg1))) (i32.const 2))))
+          (then
+            (return (local.get $arg1))
+          )
+        )
       )
     )
 
@@ -688,56 +696,50 @@
     (return (local.get $arg2))
   )
 
+  ;; TODO: handle numbers properly - 0 is false
   (func $logical_and (param $arg1 anyref) (param $arg2 anyref) (result anyref)
-    (local $arg1_is_false_or_null i32)
-    (local.set $arg1_is_false_or_null (i32.const 0))
+    (if (ref.test nullref (local.get $arg1))
+      (then
+        ;; if arg1 is undefined we return arg1
+        (return (local.get $arg1))
+      )
+    )
+
+    ;; if arg1 is null or false, we return arg1 too
     (if (ref.test i31ref (local.get $arg1))
       (then
         (if (i32.or
               (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg1))) (i32.const 0))
               (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg1))) (i32.const 2)))
           (then
-            (local.set $arg1_is_false_or_null (i32.const 1))
+            (return (local.get $arg1))
           )
         )
       )
     )
 
-    (if (i32.or
-          (local.get $arg1_is_false_or_null)
-          (ref.test nullref (local.get $arg1)))
-      (then
-        ;; if arg1 is (false or null or undefined) we return arg1
-        (return (local.get $arg1))
-      )
-    )
-
     ;; otherwise we return arg2
     (return (local.get $arg2))
-
   )
 
   (func $logical_not (param $arg anyref) (result i31ref)
-    (local $arg_is_false_or_null i32)
-    (local.set $arg_is_false_or_null (i32.const 0))
+    (if (ref.test nullref (local.get $arg))
+      (then
+        ;; if arg is undefined we return true
+        (return (ref.i31 (i32.const 1)))
+      )
+    )
+
     (if (ref.test i31ref (local.get $arg))
       (then
         (if (i32.or
               (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg))) (i32.const 0))
               (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg))) (i32.const 2)))
           (then
-            (local.set $arg_is_false_or_null (i32.const 1))
+            ;; if arg is null or false we return 1
+            (return (ref.i31 (i32.const 1)))
           )
         )
-      )
-    )
-
-    (if (i32.or
-          (local.get $arg_is_false_or_null)
-          (ref.test nullref (local.get $arg)))
-      (then
-        ;; if arg is (false or null or undefined) we return true
-        (return (ref.i31 (i32.const 1)))
       )
     )
 
@@ -746,6 +748,12 @@
   )
 
   (func $type_of (param $arg anyref) (result (ref $StaticString))
+    (if (ref.test nullref (local.get $arg))
+      (then
+        (return (call $new_static_string (i32.const 200) (i32.const 9)))
+      )
+    )
+
     (if (ref.test i31ref (local.get $arg))
       (then
         (if (i32.or
@@ -1042,7 +1050,7 @@
   (i32.add (local.get $start) (local.get $length))
 )
 
-  (func $log (param $arguments (ref null $JSArgs))
+  (func $log (param $arguments (ref $JSArgs))
     (local $i i32)                    ;; loop counter
     (local $j i32)                    ;; loop counter
     (local $len i32)                  ;; length of arguments array
@@ -1056,6 +1064,7 @@
     (local $str_ref (ref $String))  ;; temporary storage for string reference
     (local $num_ref (ref $Number))    ;; temporary storage for number reference
     (local $handled i32)
+    (local $i31_ref i31ref)
  
     ;; Get length of arguments array
     (local.set $len 
@@ -1085,7 +1094,7 @@
         ;; Get current argument
         (local.set $current 
           (array.get $JSArgs
-            (ref.cast (ref $JSArgs) (local.get $arguments))
+            (local.get $arguments)
             (local.get $i)
           )
         )
@@ -1093,11 +1102,139 @@
         ;; argument not handled yet
         (local.set $handled (i32.const 0))
        
+        ;; check if it's undefined
+        (if (ref.test nullref (local.get $current))
+          (then
+            ;; Store iovector data
+            (i32.store 
+              (local.get $iovectors_offset)
+              (i32.const 200)
+            )
+            (i32.store 
+              (i32.add (local.get $iovectors_offset) (i32.const 4))
+              (i32.const 9)
+            )
+            
+            (local.set $iovectors_offset 
+              (i32.add (local.get $iovectors_offset) (i32.const 8))
+            )
+    
+            ;; argument handled
+            (local.set $handled (i32.const 1))
+          )
+        )
+
+        ;; check if it's null, false or a number
+        (if (i32.and
+              (ref.test i31ref (local.get $current))
+              (i32.eqz (ref.test nullref (local.get $current))))
+          (then
+            (local.set $i31_ref
+              (ref.cast i31ref (local.get $current)))
+
+            (if (i32.eq
+              (i31.get_s (ref.cast (ref null i31) (local.get $current)))
+              (i32.const 0))
+              (then
+                ;; Store iovector data
+                (i32.store
+                  (local.get $iovectors_offset)
+                  (i32.const 276)
+                )
+                (i32.store 
+                  (i32.add (local.get $iovectors_offset) (i32.const 4))
+                  (i32.const 5)
+                )
+                
+                (local.set $iovectors_offset 
+                  (i32.add (local.get $iovectors_offset) (i32.const 8))
+                )
+    
+                ;; argument handled
+                (local.set $handled (i32.const 1))
+              )
+            )
+
+            (if (i32.eq
+              (i31.get_s (ref.cast (ref null i31) (local.get $current)))
+              (i32.const 1))
+              (then
+                ;; Store iovector data
+                (i32.store
+                  (local.get $iovectors_offset)
+                  (i32.const 272)
+                )
+                (i32.store 
+                  (i32.add (local.get $iovectors_offset) (i32.const 4))
+                  (i32.const 4)
+                )
+                
+                (local.set $iovectors_offset 
+                  (i32.add (local.get $iovectors_offset) (i32.const 8))
+                )
+    
+                ;; argument handled
+                (local.set $handled (i32.const 1))
+              )
+            )
+
+            (if (i32.eq
+              (i31.get_s (ref.cast (ref null i31) (local.get $current)))
+              (i32.const 2))
+              (then
+                ;; Store iovector data
+                (i32.store
+                  (local.get $iovectors_offset)
+                  (i32.const 268)
+                )
+                (i32.store 
+                  (i32.add (local.get $iovectors_offset) (i32.const 4))
+                  (i32.const 4)
+                )
+                
+                (local.set $iovectors_offset 
+                  (i32.add (local.get $iovectors_offset) (i32.const 8))
+                )
+    
+                ;; argument handled
+              )
+            )
+
+            (local.set $num_val 
+              (f64.convert_i32_s (i31.get_s (ref.cast (ref null i31) (local.get $current))))
+            )
+            
+            ;; Write number to memory and get length
+            (local.set $written_length
+              (call $writeF64AsAscii 
+                (local.get $num_val)
+                (local.get $offset)
+              )
+            )
+            
+            ;; Store iovector data
+            (i32.store (local.get $iovectors_offset) (local.get $offset))
+            (i32.store 
+              (i32.add (local.get $iovectors_offset) (i32.const 4))
+              (local.get $written_length)
+            )
+            
+            ;; Update offsets
+            (local.set $offset 
+              (i32.add (local.get $offset) (local.get $written_length))
+            )
+            (local.set $iovectors_offset 
+              (i32.add (local.get $iovectors_offset) (i32.const 8))
+            )
+            (local.set $handled (i32.const 1))
+          )
+        )
+
         ;; Check if it's a Number
         (if (ref.test (ref $Number) (local.get $current))
           (then
             ;; Cast to Number and get value
-            (local.set $num_ref 
+            (local.set $num_ref
               (ref.cast (ref $Number) (local.get $current))
             )
             (local.set $num_val 
@@ -1150,13 +1287,6 @@
               (struct.get $StaticString $length (local.get $static_str_ref))
             )
             
-            ;; Update offset for next write
-            ;;(local.set $offset 
-            ;;  (i32.add 
-            ;;    (local.get $offset)
-            ;;    (struct.get $StaticString $length (local.get $static_str_ref))
-            ;;  )
-            ;;)
             (local.set $iovectors_offset 
               (i32.add (local.get $iovectors_offset) (i32.const 8))
             )
@@ -1257,7 +1387,28 @@
     drop
   )
 
+        
   {init_code}
 
-  (export "_start" (func $init))
+  (func $outer_init
+    (local $call_arguments (ref $JSArgs))
+    (local $error anyref)
+    (local $temp_arg anyref)
+    try
+      (call $init)
+    catch $JSException
+      (local.set $error)
+      (array.new $JSArgs (ref.null any) (i32.const 2))
+      (local.set $call_arguments)
+      (call $new_static_string (i32.const 172) (i32.const 17))
+      (local.set $temp_arg)
+      (array.set $JSArgs (local.get $call_arguments) (i32.const 0) (local.get $temp_arg))
+      (array.set $JSArgs (local.get $call_arguments) (i32.const 1) (local.get $error))
+
+      (call $log (local.get $call_arguments))     
+      (call $proc_exit (i32.const 1))
+    end
+  )
+
+  (export "_start" (func $outer_init))
 )

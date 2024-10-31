@@ -8,7 +8,7 @@ use boa_ast::{
             update::UpdateTarget,
             Assign, Binary, Unary, Update,
         },
-        Call, Expression, Identifier, New,
+        Call, Expression, Identifier, New, Parenthesized,
     },
     function::{ArrowFunction, FormalParameterList, Function, FunctionBody},
     statement::{Block, Catch, Finally, If, Return, Statement, Throw, Try, WhileLoop},
@@ -23,6 +23,7 @@ use std::{
     fs::File,
     io::{self, Read, Write},
     ops::{ControlFlow, Deref},
+    path::Path,
 };
 
 mod wat_ast;
@@ -66,7 +67,7 @@ impl WasmTranslator {
             functions: HashMap::new(),
             init_code: Vec::new(),
             data_entries: HashMap::new(),
-            data_offset: 268,
+            data_offset: 300,
             identifiers_map: HashMap::new(),
             current_block_number: 0,
         }
@@ -146,8 +147,7 @@ impl WasmTranslator {
         self.current_function().add_result("anyref".to_string());
 
         self.current_function()
-            .locals
-            .insert(("$scope".to_string(), "(ref $Scope)".to_string()));
+            .add_local_exact("$scope", "(ref $Scope)");
         self.current_function()
             .add_instruction(W::call("$new_scope", vec![W::local_get("$parentScope")]));
         self.current_function()
@@ -242,9 +242,10 @@ impl WasmTranslator {
         let mut instructions = Vec::new();
 
         // Add a local for arguments to the current function
-        self.current_function()
+        let call_arguments = self
+            .current_function()
             .add_local("$call_arguments", "(ref $JSArgs)");
-        self.current_function().add_local("$temp_arg", "anyref");
+        let temp_arg = self.current_function().add_local("$temp_arg", "anyref");
 
         // Create the arguments array
         let args_count = call.args().len() as i32;
@@ -253,48 +254,43 @@ impl WasmTranslator {
             W::ref_null("any"),
             W::i32_const(args_count),
         ));
-        instructions.push(W::local_set("$call_arguments"));
+        instructions.push(W::local_set(&call_arguments));
 
         // Populate the arguments array
         for (index, arg) in call.args().iter().enumerate() {
             let arg_instruction = self.translate_expression(arg, true);
             instructions.push(W::list(vec![
                 arg_instruction,
-                W::local_set("$temp_arg"),
+                W::local_set(&temp_arg),
                 W::instruction(
                     "array.set",
                     vec![
                         W::r#type("$JSArgs"),
-                        W::local_get("$call_arguments"),
+                        W::local_get(&call_arguments),
                         W::i32_const(index as i32),
-                        W::local_get("$temp_arg"),
+                        W::local_get(&temp_arg),
                     ],
                 ),
             ]));
         }
 
         if function_name == "console.log" {
-            instructions.push(W::call(
-                "$log",
-                vec![W::local_get("$call_arguments".to_string())],
-            ));
+            instructions.push(W::call("$log", vec![W::local_get(&call_arguments)]));
             instructions.push(W::i32_const(1));
         } else {
             // Translate the function expression
-            self.current_function()
-                .locals
-                .insert(("$function".to_string(), "anyref".to_string()));
+            let function_local = self.current_function().add_local("$function", "anyref");
             instructions.push(self.translate_expression(call.function(), true));
-            instructions.push(W::local_set("$function"));
+            instructions.push(W::local_set(&function_local));
 
             // Call the function
             instructions.push(W::call(
                 "$call_function",
                 vec![
                     W::local_get("$scope"),
-                    W::local_get("$function"),
+                    W::local_get(&function_local),
                     get_this,
-                    W::local_get("$call_arguments"),
+                    W::local_get(&call_arguments),
                 ],
             ));
         }
@@ -308,9 +304,7 @@ impl WasmTranslator {
     fn translate_let_vars(&mut self, variable_list: &VariableList) -> Box<W> {
         use boa_ast::declaration::Binding;
 
-        self.current_function()
-            .locals
-            .insert(("$var".to_string(), "anyref".to_string()));
+        let var_name = self.current_function().add_local("$var", "anyref");
 
         let mut instructions = Vec::new();
         for var in variable_list.as_ref() {
@@ -320,11 +314,11 @@ impl WasmTranslator {
                         let offset = self.add_identifier(&identifier);
 
                         instructions.push(self.translate_expression(expression, true));
-                        instructions.push(W::local_set("$var"));
+                        instructions.push(W::local_set(&var_name));
 
                         instructions.push(W::local_get("$scope"));
                         instructions.push(W::i32_const(offset));
-                        instructions.push(W::local_get("$var"));
+                        instructions.push(W::local_get(&var_name));
                         instructions.push(W::call("$set_variable".to_string(), vec![]));
                     }
                     Binding::Pattern(_pattern) => todo!(),
@@ -369,13 +363,16 @@ impl WasmTranslator {
                     RelationalOp::In => todo!(),
                     RelationalOp::InstanceOf => todo!(),
                 };
-                self.current_function().add_local("$rhs_anyref", "anyref");
+                let rhs = self.current_function().add_local("$rhs", "anyref");
+                let lhs = self.current_function().add_local("$lhs", "anyref");
 
                 W::list(vec![
-                    self.translate_expression(binary.rhs(), true),
-                    W::local_set("$rhs_anyref"),
                     self.translate_expression(binary.lhs(), true),
-                    W::local_get("$rhs_anyref"),
+                    W::local_set(&lhs),
+                    self.translate_expression(binary.rhs(), true),
+                    W::local_set(&rhs),
+                    W::local_get(&lhs),
+                    W::local_get(&rhs),
                     W::call(func_name, vec![]),
                 ])
             }
@@ -385,13 +382,16 @@ impl WasmTranslator {
                     LogicalOp::Or => "$logical_or",
                     LogicalOp::Coalesce => "$logical_coalesce",
                 };
-                self.current_function().add_local("$rhs_anyref", "anyref");
+                let rhs = self.current_function().add_local("$rhs", "anyref");
+                let lhs = self.current_function().add_local("$lhs", "anyref");
 
                 W::list(vec![
-                    self.translate_expression(binary.rhs(), true),
-                    W::local_set("$rhs_anyref"),
                     self.translate_expression(binary.lhs(), true),
-                    W::local_get("$rhs_anyref"),
+                    W::local_set(&lhs),
+                    self.translate_expression(binary.rhs(), true),
+                    W::local_set(&rhs),
+                    W::local_get(&lhs),
+                    W::local_get(&rhs),
                     W::call(func_name, vec![]),
                 ])
             }
@@ -428,16 +428,15 @@ impl WasmTranslator {
                 match simple_property_access.field() {
                     PropertyAccessField::Const(sym) => {
                         let offset = self.add_symbol(*sym);
-                        // self.current_function().add_local("$target", "anyref");
 
                         if let Some(assign_instruction) = assign {
-                            self.current_function().add_local("$temp_anyref", "anyref");
+                            let temp = self.current_function().add_local("$temp", "anyref");
                             W::list(vec![
                                 assign_instruction,
-                                W::local_set("$temp_anyref"),
+                                W::local_set(&temp),
                                 target,
                                 W::i32_const(offset),
-                                W::local_get("$temp_anyref"),
+                                W::local_get(&temp),
                                 W::call("$set_property", vec![]),
                             ])
                         } else {
@@ -510,9 +509,15 @@ impl WasmTranslator {
             Expression::Conditional(_conditional) => todo!(),
             Expression::Await(_) => todo!(),
             Expression::Yield(_) => todo!(),
-            Expression::Parenthesized(_parenthesized) => todo!(),
+            Expression::Parenthesized(parenthesized) => self.translate_parenthesized(parenthesized),
             _ => todo!(),
         }
+    }
+
+    fn translate_parenthesized(&mut self, parenthesized: &Parenthesized) -> Box<W> {
+        // println!("parenthesized: {parenthesized:#?}");
+
+        self.translate_expression(parenthesized.expression(), true)
     }
 
     fn translate_object_literal(
@@ -523,21 +528,24 @@ impl WasmTranslator {
         use boa_ast::property::{PropertyDefinition, PropertyName};
 
         let mut instructions = Vec::new();
-        self.current_function()
+        let new_instance = self
+            .current_function()
             .add_local("$new_instance", "(ref $Object)");
-        self.current_function().add_local("$temp_anyref", "anyref");
+        let temp = self.current_function().add_local("$temp", "anyref");
+
         instructions.push(W::call("$new_object", vec![]));
-        instructions.push(W::local_set("$new_instance"));
+        instructions.push(W::local_set(&new_instance));
+
         for property in object_literal.properties() {
             let instr = match property {
                 PropertyDefinition::IdentifierReference(identifier) => {
                     let offset = self.add_identifier(identifier);
                     W::list(vec![
                         self.translate_identifier(identifier),
-                        W::local_set("$temp_anyref"),
-                        W::local_get("$new_instance"),
+                        W::local_set(&temp),
+                        W::local_get(&new_instance),
                         W::i32_const(offset),
-                        W::local_get("$temp_anyref"),
+                        W::local_get(&temp),
                         W::call("$set_property", vec![]),
                     ])
                 }
@@ -546,10 +554,10 @@ impl WasmTranslator {
                         let offset = self.add_symbol(*sym);
                         W::list(vec![
                             self.translate_expression(expression, true),
-                            W::local_set("$temp_anyref"),
-                            W::local_get("$new_instance"),
+                            W::local_set(&temp),
+                            W::local_get(&new_instance),
                             W::i32_const(offset),
-                            W::local_get("$temp_anyref"),
+                            W::local_get(&temp),
                             W::call("$set_property", vec![]),
                         ])
                     }
@@ -571,10 +579,10 @@ impl WasmTranslator {
                             };
                             W::list(vec![
                                 func_instr,
-                                W::local_set("$temp_anyref"),
-                                W::local_get("$new_instance"),
+                                W::local_set(&temp),
+                                W::local_get(&new_instance),
                                 W::i32_const(offset),
-                                W::local_get("$temp_anyref"),
+                                W::local_get(&temp),
                                 W::call("$set_property", vec![]),
                             ])
                         }
@@ -588,23 +596,24 @@ impl WasmTranslator {
         }
 
         if will_use_return {
-            instructions.push(W::local_get("$temp_anyref"));
+            instructions.push(W::local_get(&temp));
         }
         W::list(instructions)
     }
 
     fn translate_new(&mut self, new: &New) -> Box<W> {
-        self.current_function()
+        let new_instance = self
+            .current_function()
             .add_local("$new_instance", "(ref $Object)");
         W::list(vec![
             W::call("$new_object", vec![]),
-            W::local_set("$new_instance"),
-            self.translate_call(new.call(), W::local_get("$new_instance"), true),
+            W::local_set(&new_instance),
+            self.translate_call(new.call(), W::local_get(&new_instance), true),
             W::drop(),
             // TODO: we return the created instance, but it's not always the case
             // in JS. If the returned value is an object, we should return the returned
             // value, so we need to add an if with a `ref.test` here
-            W::local_get("$new_instance"),
+            W::local_get(&new_instance),
         ])
     }
 
@@ -618,9 +627,7 @@ impl WasmTranslator {
             UpdateTarget::Identifier(identifier) => identifier,
             UpdateTarget::PropertyAccess(_property_access) => todo!(),
         };
-        self.current_function()
-            .locals
-            .insert(("$var".to_string(), "anyref".to_string()));
+        let var = self.current_function().add_local("$var", "anyref");
 
         // TODO: figure out pre vs post behaviour
         let instruction = match update.op() {
@@ -636,16 +643,11 @@ impl WasmTranslator {
             vec![
                 W::local_get("$scope".to_string()),
                 W::i32_const(offset),
-                W::local_get("$var"),
+                W::local_get(&var),
             ],
         );
 
-        W::list(vec![
-            target,
-            instruction,
-            W::local_set("$var"),
-            set_variable,
-        ])
+        W::list(vec![target, instruction, W::local_set(&var), set_variable])
     }
 
     fn translate_assign(&mut self, assign: &Assign) -> Box<W> {
@@ -659,16 +661,16 @@ impl WasmTranslator {
                     AssignTarget::Identifier(identifier) => {
                         let offset = self.add_identifier(identifier);
                         // identifier.sym().get(),
-                        self.current_function().add_local("$rhs_anyref", "anyref");
+                        let rhs_var = self.current_function().add_local("$rhs", "anyref");
                         W::list(vec![
                             rhs,
-                            W::local_set("$rhs_anyref"),
+                            W::local_set(&rhs_var),
                             W::call(
                                 "$set_variable".to_string(),
                                 vec![
                                     W::local_get("$scope".to_string()),
                                     W::i32_const(offset),
-                                    W::local_get("$rhs_anyref"),
+                                    W::local_get(&rhs_var),
                                 ],
                             ),
                         ])
@@ -680,7 +682,7 @@ impl WasmTranslator {
                 }
             }
             AssignOp::Add => {
-                // println!("assign op: {assign:#?}");
+                println!("assign op: {assign:#?}");
                 todo!()
             }
             AssignOp::Sub => todo!(),
@@ -770,7 +772,7 @@ impl WasmTranslator {
             .iter()
             .map(|(offset, value)| {
                 format!(
-                    "(data $d{offset} (i32.const {offset}) \"{value}\")",
+                    "(data $d{offset} (i32.const {offset}) \"{value}\")\n",
                     offset = offset,
                     value = value
                 )
@@ -826,16 +828,16 @@ impl WasmTranslator {
             let binding_instr = if let Some(binding) = catch.parameter() {
                 match binding {
                     Binding::Identifier(identifier) => {
-                        self.current_function().add_local("$temp_anyref", "anyref");
+                        let temp = self.current_function().add_local("$temp", "anyref");
                         let offset = self.add_identifier(identifier);
                         W::list(vec![
-                            W::local_set("$temp_anyref"),
+                            W::local_set(&temp),
                             W::call(
                                 "$set_variable".to_string(),
                                 vec![
                                     W::local_get("$scope".to_string()),
                                     W::i32_const(offset),
-                                    W::local_get("$temp_anyref"),
+                                    W::local_get(&temp),
                                 ],
                             ),
                         ])
@@ -1018,11 +1020,15 @@ fn main() -> io::Result<()> {
     translator.exit_function();
 
     let init = translator.module.get_function_mut("init").unwrap();
-    init.locals
-        .insert(("$scope".to_string(), "(ref $Scope)".to_string()));
-    init.body.push_front(W::local_set("$scope".to_string()));
+    init.add_local_exact("$scope", "(ref $Scope)");
+
+    init.body.push_front(W::local_set("$scope"));
     init.body
         .push_front(W::call("$new_scope", vec![W::ref_null("$Scope")]));
+    init.body.push_back(W::list(vec![
+        W::i32_const(0),
+        W::call("$proc_exit", vec![]),
+    ]));
 
     // Generate the full WAT module
     let module = translator.module.to_string();
@@ -1035,7 +1041,8 @@ fn main() -> io::Result<()> {
         translator.data_offset + (4 - translator.data_offset % 4),
     );
 
-    let mut f = File::create("wat/generated.wat").unwrap();
+    let js2wasm_dir = std::env::var("JS2WASM_DIR").unwrap_or(".".into());
+    let mut f = File::create(Path::new(&js2wasm_dir).join("wat/generated.wat")).unwrap();
     f.write_all(module.as_bytes()).unwrap();
 
     //println!("WAT modules generated successfully!");
