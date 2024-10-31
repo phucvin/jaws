@@ -30,6 +30,24 @@ mod wat_ast;
 mod wat_template;
 use wat_ast::{WatFunction, WatInstruction as W, WatModule};
 
+enum VarType {
+    Const,
+    Let,
+    Var,
+    Param,
+}
+
+impl VarType {
+    fn to_i32(&self) -> i32 {
+        match self {
+            VarType::Const => 0,
+            VarType::Let => 1,
+            VarType::Var => 2,
+            VarType::Param => 3,
+        }
+    }
+}
+
 fn gen_function_name(s: Option<String>) -> String {
     let r: String = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -159,7 +177,7 @@ impl WasmTranslator {
                 boa_ast::declaration::Binding::Identifier(identifier) => {
                     let offset = self.add_identifier(identifier);
                     self.current_function().add_instruction(W::call(
-                        "$set_variable",
+                        "$declare_variable",
                         vec![
                             W::local_get("$scope"),
                             W::i32_const(offset),
@@ -171,6 +189,7 @@ impl WasmTranslator {
                                     W::i32_const(i as i32),
                                 ],
                             ),
+                            W::i32_const(VarType::Param.to_i32()),
                         ],
                     ));
                 }
@@ -220,17 +239,21 @@ impl WasmTranslator {
         //     decl.to_interned_string(&self.interner)
         // );
         match decl {
-            LexicalDeclaration::Const(_variable_list) => todo!(),
-            LexicalDeclaration::Let(variable_list) => self.translate_let_vars(variable_list),
+            LexicalDeclaration::Const(variable_list) => {
+                self.translate_let_vars(variable_list, VarType::Const)
+            }
+            LexicalDeclaration::Let(variable_list) => {
+                self.translate_let_vars(variable_list, VarType::Let)
+            }
         }
     }
 
-    fn translate_let(&mut self, decl: &VarDeclaration) -> Box<W> {
-        //println!("LET: {:#?}", decl.0);
+    fn translate_var(&mut self, decl: &VarDeclaration) -> Box<W> {
+        // println!("LET: {:#?}", decl.0);
         // TODO: variables behave a bit differently when it comes to hoisting
         // for now I just ignore it, but it should be fixed
         // https://developer.mozilla.org/en-US/docs/Glossary/Hoisting
-        self.translate_let_vars(&decl.0)
+        self.translate_let_vars(&decl.0, VarType::Var)
     }
 
     fn translate_call(&mut self, call: &Call, get_this: Box<W>, will_use_return: bool) -> Box<W> {
@@ -301,28 +324,31 @@ impl WasmTranslator {
         W::list(instructions)
     }
 
-    fn translate_let_vars(&mut self, variable_list: &VariableList) -> Box<W> {
+    fn translate_let_vars(&mut self, variable_list: &VariableList, var_type: VarType) -> Box<W> {
         use boa_ast::declaration::Binding;
 
         let var_name = self.current_function().add_local("$var", "anyref");
 
         let mut instructions = Vec::new();
+        // TODO: handle hoisting
         for var in variable_list.as_ref() {
-            if let Some(expression) = var.init() {
-                match var.binding() {
-                    Binding::Identifier(identifier) => {
-                        let offset = self.add_identifier(&identifier);
-
+            match var.binding() {
+                Binding::Identifier(identifier) => {
+                    let offset = self.add_identifier(identifier);
+                    if let Some(expression) = var.init() {
                         instructions.push(self.translate_expression(expression, true));
-                        instructions.push(W::local_set(&var_name));
-
-                        instructions.push(W::local_get("$scope"));
-                        instructions.push(W::i32_const(offset));
-                        instructions.push(W::local_get(&var_name));
-                        instructions.push(W::call("$set_variable".to_string(), vec![]));
+                    } else {
+                        instructions.push(W::ref_null("any"));
                     }
-                    Binding::Pattern(_pattern) => todo!(),
+                    instructions.push(W::local_set(&var_name));
+
+                    instructions.push(W::local_get("$scope"));
+                    instructions.push(W::i32_const(offset));
+                    instructions.push(W::local_get(&var_name));
+                    instructions.push(W::i32_const(var_type.to_i32()));
+                    instructions.push(W::call("$declare_variable", vec![]));
                 }
+                Binding::Pattern(_pattern) => todo!(),
             }
         }
 
@@ -747,11 +773,17 @@ impl WasmTranslator {
             Declaration::Function(decl) => {
                 let declaration = self.translate_function(decl);
                 // function declaration still needs to be added to the scope if function has a name
+                // TODO: declared functions need to be hoisted
                 if let Some(name) = decl.name() {
                     let offset = self.add_identifier(&name);
                     W::call(
-                        "$set_variable".to_string(),
-                        vec![W::local_get("$scope"), W::i32_const(offset), declaration],
+                        "$declare_variable".to_string(),
+                        vec![
+                            W::local_get("$scope"),
+                            W::i32_const(offset),
+                            declaration,
+                            W::i32_const(VarType::Var.to_i32()),
+                        ],
                     )
                 } else {
                     // TODO: if it's empty and not called right away I guess we can just ignore it?
@@ -802,7 +834,7 @@ impl WasmTranslator {
     fn translate_statement(&mut self, statement: &Statement) -> Box<W> {
         match statement {
             Statement::Block(block) => self.translate_block(block),
-            Statement::Var(var_declaration) => self.translate_let(var_declaration),
+            Statement::Var(var_declaration) => self.translate_var(var_declaration),
             Statement::Empty => W::empty(),
             Statement::Expression(expression) => self.translate_expression(expression, false),
             Statement::If(if_statement) => self.translate_if_statement(if_statement),
@@ -833,11 +865,12 @@ impl WasmTranslator {
                         W::list(vec![
                             W::local_set(&temp),
                             W::call(
-                                "$set_variable".to_string(),
+                                "$declare_variable".to_string(),
                                 vec![
                                     W::local_get("$scope".to_string()),
                                     W::i32_const(offset),
                                     W::local_get(&temp),
+                                    W::i32_const(VarType::Param.to_i32()),
                                 ],
                             ),
                         ])
@@ -936,11 +969,11 @@ impl<'a> Visitor<'a> for WasmTranslator {
     type BreakTy = ();
 
     fn visit_var_declaration(&mut self, node: &'a VarDeclaration) -> ControlFlow<Self::BreakTy> {
-        // println!(
-        //     "visit_var_declaration: {}",
-        //     node.to_interned_string(&self.interner)
-        // );
-        let instruction = self.translate_let(node);
+        println!(
+            "visit_var_declaration: {}",
+            node.to_interned_string(&self.interner)
+        );
+        let instruction = self.translate_var(node);
         self.current_function().add_instruction(instruction);
         ControlFlow::Continue(())
     }
@@ -993,7 +1026,7 @@ fn main() -> io::Result<()> {
 
     let mut parser = Parser::new(Source::from_bytes(&full));
     let ast = parser.parse_script(&mut interner).unwrap();
-    //println!("{ast:#?}");
+    // println!("{ast:#?}");
 
     let mut translator = WasmTranslator::new(interner);
     for type_of_value in [

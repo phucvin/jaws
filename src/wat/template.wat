@@ -50,23 +50,33 @@
     (field $length i32)
   ))
 
-
   (type $HashMapEntry (struct
     (field $key (mut i32))
     (field $value (mut anyref))
   ))
 
+  (type $HashMapEntryI32 (struct
+    (field $key (mut i32))
+    (field $value (mut i32))
+  ))
+
   (type $EntriesArray (array (mut (ref null $HashMapEntry))))
+  (type $EntriesArrayI32 (array (mut (ref null $HashMapEntryI32))))
 
   (type $HashMap (struct
     (field $entries (mut (ref $EntriesArray)))
     (field $size (mut i32))
   ))
 
+  (type $HashMapI32 (struct
+    (field $entries (mut (ref $EntriesArrayI32)))
+    (field $size (mut i32))
+  ))
+
   (type $Scope (struct
     (field $parent (mut (ref null $Scope)))
     (field $variables (mut (ref $HashMap)))
-    (field $constants (mut (ref $HashMap)))
+    (field $var_types (mut (ref $HashMapI32)))
   ))
 
   (type $JSArgs (array (mut anyref)))
@@ -218,6 +228,13 @@
     )
   )
 
+  (func $new_hashmap_i32 (result (ref $HashMapI32))
+    (struct.new $HashMapI32
+      (array.new $EntriesArrayI32 (ref.null $HashMapEntryI32) (i32.const 10))
+      (i32.const 0)
+    )
+  )
+
   (func $new_object (result (ref $Object))
     (struct.new $Object
       (call $new_hashmap)
@@ -298,15 +315,85 @@
     (struct.new $Scope
       (local.get $parent)
       (call $new_hashmap)
-      (call $new_hashmap)
+      (call $new_hashmap_i32)
     )
   )
 
+  ;; TODO: for let and const we need to check if the values already exist
   (func $set_variable (param $scope (ref $Scope)) (param $name i32) (param $value anyref)
+    (local $existing_type i32)
+
+    (call $hashmap_get_i32
+      (struct.get $Scope $var_types (local.get $scope))
+      (local.get $name)
+    )
+    (local.set $existing_type)
+
+    (if (i32.eq (local.get $existing_type) (i32.const 0))
+      (then
+        ;; 0 means it's a const, we have to throw an error
+        ;; TODO: throw proper eception type
+        (throw $JSException (ref.i31 (i32.const 12)))
+      )
+    )
+
     (call $hashmap_set
       (struct.get $Scope $variables (local.get $scope))
       (local.get $name)
       (local.get $value)
+    )
+;;    (call $hashmap_set_i32
+;;      (struct.get $Scope $var_types (local.get $scope))
+;;      (local.get $name)
+;;      (local.get $var_type)
+;;    )
+  )
+
+  (func $declare_variable (param $scope (ref $Scope)) (param $name i32) (param $value anyref) (param $var_type i32)
+    (local $existing_type i32)
+
+    (call $hashmap_get_i32
+      (struct.get $Scope $var_types (local.get $scope))
+      (local.get $name)
+    )
+    (local.set $existing_type)
+
+    (if (i32.or
+          (i32.eq (local.get $existing_type) (i32.const 3))
+          (i32.or
+            (i32.eq (local.get $existing_type) (i32.const -1))
+            (i32.eq (local.get $existing_type) (i32.const  2))))
+      (then
+        ;; -1 means there is no such var in the hashmap, we can declare no matter what
+        ;; 2 means var and 3 means param, which are also valid to overwrite
+        (call $hashmap_set
+          (struct.get $Scope $variables (local.get $scope))
+          (local.get $name)
+          (local.get $value)
+        )
+        (call $hashmap_set_i32
+          (struct.get $Scope $var_types (local.get $scope))
+          (local.get $name)
+          (local.get $var_type)
+        )
+        (return)
+      )
+    )
+
+    (if (i32.eq (local.get $existing_type) (i32.const 0))
+      (then
+        ;; 0 means it's a const, we have to throw an error
+        ;; TODO: throw proper eception type
+        (throw $JSException (ref.i31 (i32.const 10)))
+      )
+    )
+
+    (if (i32.eq (local.get $existing_type) (i32.const 1))
+      (then
+        ;; 1 means it's a let, we have to throw an error
+        ;; TODO: throw proper eception type
+        (throw $JSException (ref.i31 (i32.const 11)))
+      )
     )
   )
 
@@ -463,6 +550,75 @@
     )
   )
 
+  (func $hashmap_set_i32 (param $map (ref $HashMapI32)) (param $key i32) (param $value i32)
+    (local $entries (ref $EntriesArrayI32))
+    (local $new_entry (ref $HashMapEntryI32))
+    (local $new_size i32)
+    (local $new_entries (ref $EntriesArrayI32))
+    (local $i i32)
+    (local $found i32)  ;; New local to track if we found the key
+
+    (local.set $entries (struct.get $HashMapI32 $entries (local.get $map)))
+    (local.set $new_entry (struct.new $HashMapEntryI32 (local.get $key) (local.get $value)))
+    (local.set $found (i32.const 0))  ;; Initialize found flag to false
+
+    ;; First, search for existing key
+    (local.set $i (i32.const 0))
+    (loop $search_loop
+      (if (i32.lt_u (local.get $i) (struct.get $HashMapI32 $size (local.get $map)))
+        (then
+          (if (i32.eq
+                (struct.get $HashMapEntryI32 $key (array.get $EntriesArrayI32 (local.get $entries) (local.get $i)))
+                (local.get $key))
+            (then
+              ;; Key found - update the value
+              (array.set $EntriesArrayI32 (local.get $entries) (local.get $i) (local.get $new_entry))
+              (local.set $found (i32.const 1))  ;; Set found flag to true
+            )
+          )
+          (if (i32.eqz (local.get $found))  ;; Only continue searching if not found
+            (then
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $search_loop)
+            )
+          )
+        )
+      )
+    )
+
+    ;; If key wasn't found, proceed with insertion
+    (if (i32.eqz (local.get $found))
+      (then
+        ;; Check if we need to resize
+        (if (i32.ge_u (struct.get $HashMapI32 $size (local.get $map)) (array.len (local.get $entries)))
+          (then
+            (local.set $new_size (i32.mul (array.len (local.get $entries)) (i32.const 2)))
+            (local.set $new_entries (array.new $EntriesArrayI32 (ref.null $HashMapEntryI32) (local.get $new_size)))
+
+            (local.set $i (i32.const 0))
+            (loop $copy_loop
+              (if (i32.lt_u (local.get $i) (array.len (local.get $entries)))
+                (then
+                  (array.set $EntriesArrayI32 (local.get $new_entries) (local.get $i)
+                    (array.get $EntriesArrayI32 (local.get $entries) (local.get $i)))
+                  (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                  (br $copy_loop)
+                )
+              )
+            )
+
+            (struct.set $HashMapI32 $entries (local.get $map) (local.get $new_entries))
+            (local.set $entries (local.get $new_entries))
+          )
+        )
+
+        ;; Add new entry and increment size
+        (array.set $EntriesArrayI32 (local.get $entries) (struct.get $HashMapI32 $size (local.get $map)) (local.get $new_entry))
+        (struct.set $HashMapI32 $size (local.get $map) (i32.add (struct.get $HashMapI32 $size (local.get $map)) (i32.const 1)))
+      )
+    )
+  )
+
   (func $hashmap_get (param $map (ref $HashMap)) (param $key i32) (result anyref)
     (local $i i32)
     (local $entries (ref $EntriesArray))
@@ -484,6 +640,35 @@
       )
     )
     (ref.null any)
+  )
+
+  (func $hashmap_get_i32 (param $map (ref $HashMapI32)) (param $key i32) (result i32)
+    (local $i i32)
+    (local $entries (ref $EntriesArrayI32))
+    (local.set $entries (struct.get $HashMapI32 $entries (local.get $map)))
+    (local.set $i (i32.const 0))
+    (loop $search_loop
+      (if (i32.lt_u (local.get $i) (struct.get $HashMapI32 $size (local.get $map)))
+        (then
+          (if (i32.eq
+                (struct.get $HashMapEntryI32 $key (array.get $EntriesArrayI32 (local.get $entries) (local.get $i)))
+                (local.get $key))
+            (then
+              (return (struct.get $HashMapEntryI32 $value (array.get $EntriesArrayI32 (local.get $entries) (local.get $i))))
+            )
+          )
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $search_loop)
+        )
+      )
+    )
+
+    ;; not sure if there is a better way to handle this, but since the result is i32,
+    ;; we have to return something on not found key
+    ;; if it was used for anything else than values greater than zero, we should probably
+    ;; make a function like hashmap_exists_i32 and then if a key exists, assume hashmap_get returns
+    ;; a proper key
+    (i32.const -1)
   )
 
   (func $call_function (param $scope (ref $Scope)) (param $func anyref) (param $this anyref) (param $arguments (ref null $JSArgs)) (result anyref)
