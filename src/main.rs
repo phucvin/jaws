@@ -1,8 +1,9 @@
+use anyhow::{anyhow, Context, Result};
 use boa_ast::{
     declaration::{Declaration, LexicalDeclaration, VarDeclaration, VariableList},
     expression::{
         access::PropertyAccess,
-        literal::{Literal, ObjectLiteral},
+        literal::{ArrayLiteral, Literal, ObjectLiteral},
         operator::{
             binary::{ArithmeticOp, BinaryOp, LogicalOp},
             update::UpdateTarget,
@@ -498,7 +499,9 @@ impl WasmTranslator {
             }
             Expression::Literal(literal) => self.translate_literal(literal),
             Expression::RegExpLiteral(_reg_exp_literal) => todo!(),
-            Expression::ArrayLiteral(_array_literal) => todo!(),
+            Expression::ArrayLiteral(array_literal) => {
+                self.translate_array_literal(array_literal, will_use_return)
+            }
             Expression::ObjectLiteral(object_literal) => {
                 self.translate_object_literal(object_literal, will_use_return)
             }
@@ -538,6 +541,61 @@ impl WasmTranslator {
             Expression::Parenthesized(parenthesized) => self.translate_parenthesized(parenthesized),
             _ => todo!(),
         }
+    }
+
+    fn translate_array_literal(
+        &mut self,
+        array_literal: &ArrayLiteral,
+        will_use_return: bool,
+    ) -> Box<W> {
+        // println!("array literal: {:#?}", array_literal);
+        let var = self.current_function().add_local("$array_elem", "anyref");
+        let array_var = self
+            .current_function()
+            .add_local("$array_var", "(ref $Array)");
+        let array_data = self
+            .current_function()
+            .add_local("$array_data", "(ref $AnyrefArray)");
+        let array = array_literal.as_ref();
+        let mut instructions = vec![
+            W::call("$new_array", vec![W::i32_const(array.len() as i32)]),
+            W::local_set(&array_var),
+            W::instruction(
+                "struct.get",
+                vec![
+                    W::r#type("$Array"),
+                    W::r#type("$array"),
+                    W::local_get(&array_var),
+                ],
+            ),
+            W::local_set(&array_data),
+        ];
+
+        for (i, item) in array.iter().enumerate() {
+            let value = if let Some(expression) = item {
+                self.translate_expression(expression, true)
+            } else {
+                W::ref_null("any")
+            };
+
+            instructions.push(value);
+            instructions.push(W::local_set(&var));
+            instructions.push(W::instruction(
+                "array.set",
+                vec![
+                    W::r#type("$AnyrefArray"),
+                    W::local_get(&array_data),
+                    W::i32_const(i as i32),
+                    W::local_get(&var),
+                ],
+            ))
+        }
+
+        if will_use_return {
+            instructions.push(W::local_get(&array_var));
+        }
+
+        W::list(instructions)
     }
 
     fn translate_parenthesized(&mut self, parenthesized: &Parenthesized) -> Box<W> {
@@ -1015,7 +1073,7 @@ impl<'a> Visitor<'a> for WasmTranslator {
     }
 }
 
-fn main() -> io::Result<()> {
+fn main() -> anyhow::Result<()> {
     let mut js_code = String::new();
     io::stdin().read_to_string(&mut js_code)?;
 
@@ -1025,8 +1083,9 @@ fn main() -> io::Result<()> {
     let full = format!("{js_include}\n{js_code}");
 
     let mut parser = Parser::new(Source::from_bytes(&full));
-    let ast = parser.parse_script(&mut interner).unwrap();
-    // println!("{ast:#?}");
+    let ast = parser
+        .parse_script(&mut interner)
+        .map_err(|e| anyhow!("JS2WASM parsing error: {e}"))?;
 
     let mut translator = WasmTranslator::new(interner);
     for type_of_value in [

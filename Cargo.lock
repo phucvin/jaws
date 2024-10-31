@@ -339,6 +339,7 @@ checksum = "49f1f14873335454500d59611f1cf4a4b0f786f9ac11f4312a78e4cf2566695b"
 name = "js2wasm"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "boa_ast",
  "boa_interner",
  "boa_parser",

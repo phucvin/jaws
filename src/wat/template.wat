@@ -103,6 +103,14 @@
 
   (type $Number (struct (field (mut f64))))
 
+  (type $AnyrefArray (array (mut anyref)))
+
+  ;; at the moment it doesn't have to be a struct, but in the future
+  ;; we will need support for ptototype and properties and what not
+  (type $Array (struct
+    (field $array (mut (ref $AnyrefArray)))
+  ))
+
   {additional_functions}
 
   ;; TODO: we could use data from (data) entries for creating strings, but in order
@@ -239,6 +247,12 @@
     (struct.new $Object
       (call $new_hashmap)
       (ref.null any)
+    )
+  )
+
+  (func $new_array (param $size i32) (result (ref $Array))
+    (struct.new $Array
+      (array.new $AnyrefArray (ref.null any) (local.get $size))
     )
   )
 
