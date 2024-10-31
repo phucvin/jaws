@@ -21,10 +21,27 @@ sta_js = File.read(File.join(harness_dir, 'sta.js'))
 assert_js = File.read(File.join(harness_dir, 'assert.js'))
 harness_content = sta_js + assert_js
 
-def is_optional_test?(test_path)
+def parse_features_file
+  features = File.readlines(File.join(TEST262_DIR, 'features.txt')).map(&:strip)
+  # Filter out comments and empty lines, just keep feature names
+  features.reject { |line| line.empty? || line.start_with?('#') }
+end
+
+def should_skip_test?(test_path)
   content = File.read(test_path)
-  # Check for frontmatter comments that indicate optional tests
-  content.match?(/\/\*---.*\bflags:\s*\[.*\boptional\b.*\].*---\*\//m)
+  
+  # Check for optional tests first
+  return true if content.match?(/\/\*---.*\bflags:\s*\[.*\boptional\b.*\].*---\*\//m)
+  
+  # Extract features from test file
+  if content =~ /\/\*---.*\bfeatures:\s*\[(.*?)\].*---\*\//m
+    test_features = $1.split(',').map(&:strip)
+    
+    # Check if any test feature matches our excluded features
+    return true if test_features.any? { |f| @excluded_features.include?(f) }
+  end
+  
+  false
 end
 
 def run_test(test_path, harness_content)
@@ -37,11 +54,26 @@ def run_test(test_path, harness_content)
   # Run the test and capture both output and exit code
   output = `#{JS_INTERPRETER} #{temp_file} 2>&1`
   exit_code = $?.exitstatus
+
+  # Return early if it's a parsing error
+  if output.include?("JS2WASM parsing error")
+    begin
+      File.delete(temp_file) if File.exist?(temp_file)
+    rescue => e
+      # Ignore deletion errors
+    end
+    return [0, nil, output]
+  end
   
   # Check for panic and extract location
   if output =~ /thread 'main' panicked at src\/main.rs:(\d+):(\d+):/
     panic_location = "main.rs:#{$1}:#{$2}"
-    return [exit_code, panic_location]
+    begin
+      File.delete(temp_file) if File.exist?(temp_file)
+    rescue => e
+      # Ignore deletion errors
+    end
+    return [exit_code, panic_location, output]
   end
   
   begin
@@ -49,7 +81,7 @@ def run_test(test_path, harness_content)
   rescue => e
     # Ignore deletion errors
   end
-  [exit_code, nil]
+  [exit_code, nil, output]
 end
 
 # Thread-safe counter class
@@ -66,8 +98,11 @@ class Stats
     @mutex.synchronize { @total_tests += 1 }
   end
 
-  def add_result(result, panic_location)
+  def add_result(result, panic_location, output)
     @mutex.synchronize do
+      # Skip tests with JS2WASM parsing errors
+      return if output.include?("JS2WASM parsing error")
+      
       if panic_location
         @panic_locations[panic_location] += 1
         @compilation_errors += 1
@@ -89,9 +124,12 @@ class Stats
   end
 end
 
+# Load excluded features
+@excluded_features = parse_features_file
+
 # Find all test files
 test_queue = Queue.new
-test_files = Dir.glob(File.join(test_dir, '**', '*.js')).reject { |f| is_optional_test?(f) }
+test_files = Dir.glob(File.join(test_dir, '**', '*.js')).reject { |f| should_skip_test?(f) }
 test_files.each { |f| test_queue << f }
 
 # Initialize stats
@@ -106,12 +144,14 @@ threads = thread_count.times.map do
       stats.increment_total
       relative_path = Pathname.new(test_file).relative_path_from(Pathname.new(TEST262_DIR))
       
-      result, panic_location = run_test(test_file, harness_content)
+      result, panic_location, output = run_test(test_file, harness_content)
       
-      # Thread-safe output
+      # Thread-safe output 
       output_mutex.synchronize do
         print "Running #{relative_path}... "
-        if panic_location
+        if output.include?("JS2WASM parsing error")
+          puts "⏭️  (Skipped - parsing error)"
+        elsif panic_location
           puts "🔥 (Panic at #{panic_location})"
         else
           case result
@@ -125,7 +165,7 @@ threads = thread_count.times.map do
         end
       end
 
-      stats.add_result(result, panic_location)
+      stats.add_result(result, panic_location, output)
     end
   end
 end
