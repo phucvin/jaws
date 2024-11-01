@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use boa_ast::{
     declaration::{Declaration, LexicalDeclaration, VarDeclaration, VariableList},
     expression::{
+        self,
         access::PropertyAccess,
         literal::{ArrayLiteral, Literal, ObjectLiteral},
         operator::{
@@ -70,6 +71,7 @@ struct WasmTranslator {
     functions: HashMap<String, String>,
     init_code: Vec<String>,
     data_entries: HashMap<i32, String>,
+    string_offsets: HashMap<String, i32>,
     data_offset: i32,
     identifiers_map: HashMap<i32, i32>,
     current_block_number: u32,
@@ -86,6 +88,7 @@ impl WasmTranslator {
             functions: HashMap::new(),
             init_code: Vec::new(),
             data_entries: HashMap::new(),
+            string_offsets: HashMap::new(),
             data_offset: 300,
             identifiers_map: HashMap::new(),
             current_block_number: 0,
@@ -474,7 +477,38 @@ impl WasmTranslator {
                             ])
                         }
                     }
-                    PropertyAccessField::Expr(_expression) => todo!(),
+                    PropertyAccessField::Expr(expression) => {
+                        todo!()
+                        // let expr_result_var =
+                        //     self.current_function().add_local("$expr_result", "anyref");
+                        // let expr_result_instr = self.translate_expression(expression, true);
+                        //
+                        // // TODO:
+                        // //
+                        // // we need to:
+                        // // 1. create a function to convert various types to string
+                        // // 2. create a way to put those strings into an array
+                        // // 3.
+                        // if let Some(assign_instruction) = assign {
+                        //     let temp = self.current_function().add_local("$temp", "anyref");
+                        //     W::list(vec![
+                        //         expr_result_instr,
+                        //         W::local_set(&expr_result_var),
+                        //         assign_instruction,
+                        //         W::local_set(&temp),
+                        //         target,
+                        //         W::i32_const(offset),
+                        //         W::local_get(&temp),
+                        //         W::call("$set_property", vec![]),
+                        //     ])
+                        // } else {
+                        //     W::list(vec![
+                        //         target,
+                        //         W::i32_const(offset),
+                        //         W::call("$get_property", vec![]),
+                        //     ])
+                        // }
+                    }
                 }
             }
             PropertyAccess::Private(_private_property_access) => todo!(),
@@ -680,7 +714,7 @@ impl WasmTranslator {
         }
 
         if will_use_return {
-            instructions.push(W::local_get(&temp));
+            instructions.push(W::local_get(&new_instance));
         }
         W::list(instructions)
     }
@@ -766,8 +800,49 @@ impl WasmTranslator {
                 }
             }
             AssignOp::Add => {
-                println!("assign op: {assign:#?}");
-                todo!()
+                let rhs = self.translate_expression(assign.rhs(), true);
+                match assign.lhs() {
+                    AssignTarget::Identifier(identifier) => {
+                        let offset = self.add_identifier(identifier);
+                        // identifier.sym().get(),
+                        let rhs_var = self.current_function().add_local("$rhs", "anyref");
+                        W::list(vec![
+                            rhs,
+                            W::local_set(&rhs_var),
+                            W::call(
+                                "$get_variable",
+                                vec![W::local_get("$scope"), W::i32_const(offset)],
+                            ),
+                            W::local_get(&rhs_var),
+                            W::call("$add", vec![]),
+                            W::local_set(&rhs_var),
+                            W::call(
+                                "$set_variable",
+                                vec![
+                                    W::local_get("$scope".to_string()),
+                                    W::i32_const(offset),
+                                    W::local_get(&rhs_var),
+                                ],
+                            ),
+                        ])
+                    }
+                    AssignTarget::Access(property_access) => {
+                        let rhs_var = self.current_function().add_local("$rhs", "anyref");
+                        W::list(vec![
+                            rhs,
+                            W::local_set(&rhs_var),
+                            self.translate_property_access(property_access, None),
+                            W::local_get(&rhs_var),
+                            W::call("$add", vec![]),
+                            W::local_set(&rhs_var),
+                            self.translate_property_access(
+                                property_access,
+                                Some(W::local_get(&rhs_var)),
+                            ),
+                        ])
+                    }
+                    AssignTarget::Pattern(_pattern) => todo!(),
+                }
             }
             AssignOp::Sub => todo!(),
             AssignOp::Mul => todo!(),
@@ -878,15 +953,20 @@ impl WasmTranslator {
         let value = s.replace("\"", "\\\"");
         let len = value.len() as i32;
         let offset = self.data_offset;
-        self.data_entries.insert(offset, value);
-        self.data_offset += if len % 4 == 0 {
-            len
+        if let Some(offset) = self.string_offsets.get(&value) {
+            (*offset, len)
         } else {
-            // some runtimes expect all data aligned to 4 bytes
-            len + (4 - len % 4)
-        };
+            self.data_entries.insert(offset, value.clone());
+            self.string_offsets.insert(value, offset);
+            self.data_offset += if len % 4 == 0 {
+                len
+            } else {
+                // some runtimes expect all data aligned to 4 bytes
+                len + (4 - len % 4)
+            };
 
-        (offset, len)
+            (offset, len)
+        }
     }
 
     fn translate_statement(&mut self, statement: &Statement) -> Box<W> {
@@ -1107,6 +1187,7 @@ fn main() -> anyhow::Result<()> {
         translator.add_symbol(sym);
     }
 
+    // println!("{ast:#?}");
     ast.visit_with(&mut translator);
     // exit $init function
     translator.exit_function();

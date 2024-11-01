@@ -4,6 +4,7 @@
   (type $write_type (func (param i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_write" (func $write (type $write_type)))
   (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  ;;(import "console" "log" (func $log_value (param i32)))
 
   ;; 64KB
   (memory (export "memory") 1)
