@@ -3,6 +3,7 @@
 require 'json'
 require 'pathname'
 require 'thread'
+require 'yaml'
 
 # Check required environment variables
 TEST262_DIR = ENV['TEST262_DIR']
@@ -44,9 +45,22 @@ def should_skip_test?(test_path)
   false
 end
 
+def parse_test_metadata(content)
+  if content =~ /\/\*---(.*?)---\*\//m
+    begin
+      metadata = YAML.load($1)
+      return metadata
+    rescue
+      return {}
+    end
+  end
+  {}
+end
+
 def run_test(test_path, harness_content)
   # Create temporary file with harness and test content
   test_content = File.read(test_path)
+  metadata = parse_test_metadata(test_content)
   temp_file = File.join('/tmp', "test262_#{Time.now.to_i}_#{rand(1000)}.js")
   
   File.write(temp_file, harness_content + "\n" + test_content)
@@ -55,14 +69,19 @@ def run_test(test_path, harness_content)
   output = `#{JS_INTERPRETER} #{temp_file} 2>&1`
   exit_code = $?.exitstatus
 
-  # Return early if it's a parsing error
+  # Check if this is a negative test that should fail parsing
+  expected_parse_error = metadata.dig('negative', 'phase') == 'parse' &&
+                        metadata.dig('negative', 'type') == 'SyntaxError'
+
+  # Handle parsing errors
   if output.include?("JS2WASM parsing error")
     begin
       File.delete(temp_file) if File.exist?(temp_file)
     rescue => e
       # Ignore deletion errors
     end
-    return [0, nil, output]
+    # Return success (0) if this was expected to fail parsing
+    return [expected_parse_error ? 0 : 100, nil, output]
   end
   
   # Check for panic and extract location
@@ -127,9 +146,25 @@ end
 # Load excluded features
 @excluded_features = parse_features_file
 
-# Find all test files
+# Get test files based on command line argument or find all
 test_queue = Queue.new
-test_files = Dir.glob(File.join(test_dir, '**', '*.js')).reject { |f| should_skip_test?(f) }
+test_files = if ARGV[0]
+  # If path is relative to TEST262_DIR/test, make it absolute
+  test_path = ARGV[0]
+  unless Pathname.new(test_path).absolute?
+    test_path = File.join(test_dir, test_path)
+  end
+  
+  if File.exist?(test_path)
+    [test_path]
+  else
+    puts "Error: Test file not found: #{test_path}"
+    exit 1
+  end
+else
+  Dir.glob(File.join(test_dir, '**', '*.js')).reject { |f| should_skip_test?(f) }
+end
+
 test_files.each { |f| test_queue << f }
 
 # Initialize stats
@@ -145,18 +180,18 @@ threads = thread_count.times.map do
       relative_path = Pathname.new(test_file).relative_path_from(Pathname.new(TEST262_DIR))
       
       result, panic_location, output = run_test(test_file, harness_content)
-      
+
       # Thread-safe output 
       output_mutex.synchronize do
         print "Running #{relative_path}... "
-        if output.include?("JS2WASM parsing error")
-          puts "⏭️  (Skipped - parsing error)"
-        elsif panic_location
+        if panic_location
           puts "🔥 (Panic at #{panic_location})"
         else
           case result
           when 0
             puts "✅"
+          when -1
+            puts "⏭️  (Skipped - parsing error)"
           when 100
             puts "❌ (Compilation Error)"
           when 101
