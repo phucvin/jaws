@@ -10,9 +10,9 @@ use boa_ast::{
             update::UpdateTarget,
             Assign, Binary, Unary, Update,
         },
-        Call, Expression, Identifier, New, Parenthesized,
+        Await, Call, Expression, Identifier, New, Parenthesized,
     },
-    function::{ArrowFunction, FormalParameterList, Function, FunctionBody},
+    function::{ArrowFunction, AsyncFunction, FormalParameterList, Function, FunctionBody},
     statement::{Block, Catch, Finally, If, Return, Statement, Throw, Try, WhileLoop},
     visitor::{VisitWith, Visitor},
     StatementListItem,
@@ -546,7 +546,9 @@ impl WasmTranslator {
             }
             Expression::AsyncArrowFunction(_async_arrow_function) => todo!(),
             Expression::Generator(_generator) => todo!(),
-            Expression::AsyncFunction(_async_function) => todo!(),
+            Expression::AsyncFunction(async_function) => {
+                self.translate_async_function(async_function)
+            }
             Expression::AsyncGenerator(_async_generator) => todo!(),
             Expression::Class(_class) => todo!(),
             Expression::TemplateLiteral(_template_literal) => todo!(),
@@ -570,11 +572,26 @@ impl WasmTranslator {
             Expression::Binary(binary) => self.translate_binary(binary),
             Expression::BinaryInPrivate(_binary_in_private) => todo!(),
             Expression::Conditional(_conditional) => todo!(),
-            Expression::Await(_) => todo!(),
+            Expression::Await(await_expr) => self.translate_await_expression(await_expr),
             Expression::Yield(_) => todo!(),
             Expression::Parenthesized(parenthesized) => self.translate_parenthesized(parenthesized),
             _ => todo!(),
         }
+    }
+
+    fn translate_await_expression(&mut self, await_expression: &Await) -> Box<W> {
+        todo!();
+        println!("AWAIT: {await_expression:#?}");
+        W::empty()
+    }
+
+    fn translate_async_function(&mut self, async_function: &AsyncFunction) -> Box<W> {
+        todo!();
+        self.translate_function_generic(
+            async_function.name(),
+            async_function.parameters(),
+            async_function.body(),
+        )
     }
 
     fn translate_array_literal(
@@ -925,7 +942,9 @@ impl WasmTranslator {
             }
             Declaration::Lexical(v) => self.translate_lexical(v),
             Declaration::Generator(_generator) => todo!(),
-            Declaration::AsyncFunction(_async_function) => todo!(),
+            Declaration::AsyncFunction(async_function) => {
+                self.translate_async_function(async_function)
+            }
             Declaration::AsyncGenerator(_async_generator) => todo!(),
             Declaration::Class(_class) => todo!(),
         }
@@ -1003,9 +1022,9 @@ impl WasmTranslator {
                         W::list(vec![
                             W::local_set(&temp),
                             W::call(
-                                "$declare_variable".to_string(),
+                                "$declare_variable",
                                 vec![
-                                    W::local_get("$scope".to_string()),
+                                    W::local_get("$scope"),
                                     W::i32_const(offset),
                                     W::local_get(&temp),
                                     W::i32_const(VarType::Param.to_i32()),
@@ -1198,10 +1217,10 @@ fn main() -> anyhow::Result<()> {
     init.body.push_front(W::local_set("$scope"));
     init.body
         .push_front(W::call("$new_scope", vec![W::ref_null("$Scope")]));
-    init.body.push_back(W::list(vec![
-        W::i32_const(0),
-        W::call("$proc_exit", vec![]),
-    ]));
+    // init.body.push_back(W::list(vec![
+    //     W::i32_const(0),
+    //     W::call("$proc_exit", vec![]),
+    // ]));
 
     // Generate the full WAT module
     let module = translator.module.to_string();
@@ -1218,6 +1237,6 @@ fn main() -> anyhow::Result<()> {
     let mut f = File::create(Path::new(&js2wasm_dir).join("wat/generated.wat")).unwrap();
     f.write_all(module.as_bytes()).unwrap();
 
-    //println!("WAT modules generated successfully!");
+    // println!("WAT modules generated successfully!");
     Ok(())
 }

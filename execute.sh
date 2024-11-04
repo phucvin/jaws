@@ -31,15 +31,21 @@ fi
 
 # Run the compiler
 if ! cat $1 | $COMPILER; then
-    exit 100
+  exit 100
 fi
 
+generate_wasm() {
+  wasm-tools parse $JS2WASM_DIR/wat/generated.wat -o $JS2WASM_DIR/wasm/generated.wasm
+  # && \
+  #   wasm-tools component embed --all-features $JS2WASM_DIR/wit --world js2wasm $JS2WASM_DIR/wat/generated.wat -t -o wasm/generated.core.wasm && \
+  #   wasm-tools component new $JS2WASM_DIR/wasm/generated.core.wasm -o $JS2WASM_DIR/wasm/generated.component.wasm
+}
 # Convert WAT to WASM
-if ! wasm-tools parse $JS2WASM_DIR/wat/generated.wat -o $JS2WASM_DIR/wasm/generated.wasm; then
-    exit 100
+if ! generate_wasm; then
+  exit 100
 fi
 
 # Run the WASM file
 if ! wasmedge run --enable-gc --enable-exception-handling $JS2WASM_DIR/wasm/generated.wasm | tail -n +2; then
-    exit 101
+  exit 101
 fi

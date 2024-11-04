@@ -6,6 +6,11 @@
   (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
   ;;(import "console" "log" (func $log_value (param i32)))
 
+  ;;(import "wasi:io/poll@0.2.1" "[method]pollable.ready" (func $poll-ready (param i32) (result i32)))
+  (;(import "wasi:io/poll@0.2.1" "poll" (func $poll-many (param i32 i32 i32)));)
+
+  (;(import "wasi:clocks/monotonic-clock@0.2.1" "subscribe-duration" (func $subscribe-duration (param i64) (result i32)));)
+
   ;; 64KB
   (memory (export "memory") 1)
 
@@ -13,6 +18,10 @@
   (tag $JSException (type 1))
 
   (global $free_memory_offset i32 (i32.const {free_memory_offset}))
+
+  (type $I32Array (array (mut i32)))
+  (global $pollables (mut (ref $I32Array))
+      (array.new $I32Array (i32.const -1) (i32.const 10)))
 
   ;; Types that can be passed as reference types:
   ;; i31ref 0 - false
@@ -38,6 +47,24 @@
   (data (i32.const 276) "false")
 
   {data}
+
+  ;; Memory management functions required by the Component Model
+  (func $cabi_realloc (export "cabi_realloc")
+    (param $old_ptr i32) (param $old_size i32) (param $align i32) (param $new_size i32)
+    (result i32)
+    (local $ptr i32)
+    
+    ;; Simple bump allocator for this example
+    (local.set $ptr (i32.const 1024))
+    (local.get $ptr)
+  )
+
+  (func $canonical_abi_free (export "canonical_abi_free")
+    (param $ptr i32) (param $size i32)
+    ;; TODO: implement something sensinle here or find examples on how
+    ;; it's usually done
+  )
+
 
   (type $CharArray (array (mut i8)))
 
@@ -102,7 +129,9 @@
     (field $prototype (mut anyref))
   ))
 
-  (type $Number (struct (field (mut f64))))
+  (type $Number (struct 
+    (field $value (mut f64)))
+  )
 
   (type $AnyrefArray (array (mut anyref)))
 
@@ -720,8 +749,8 @@
         (local.set $num2 (ref.cast (ref $Number) (local.get $arg2)))
         (local.set $result
           (f64.add
-            (struct.get $Number 0 (local.get $num1))
-            (struct.get $Number 0 (local.get $num2))
+            (struct.get $Number $value (local.get $num1))
+            (struct.get $Number $value (local.get $num2))
           )
         )
         (return (call $new_number (local.get $result)))
@@ -1015,7 +1044,7 @@
     (ref.i31 (i32.const 0))
   )
 
-  (func $greater_than_or_equal (param $arg1 anyref) (param $arg2 anyref) (result i32)
+  (func $greater_than_or_equal (param $arg1 anyref) (param $arg2 anyref) (result i31ref)
     (local $num1 (ref $Number))
     (local $num2 (ref $Number))
     (local $result f64)
@@ -1027,15 +1056,15 @@
         (local.set $num1 (ref.cast (ref $Number) (local.get $arg1)))
         (local.set $num2 (ref.cast (ref $Number) (local.get $arg2)))
         (return 
-          (f64.ge
+          (ref.i31 (f64.ge
             (struct.get $Number 0 (local.get $num1))
             (struct.get $Number 0 (local.get $num2))
-          )
+          ))
         )
       )
     )
 
-    (i32.const 0)
+    (ref.i31 (i32.const 0))
   )
 
   (func $increment_number (param $arg1 anyref) (result anyref)
@@ -1587,15 +1616,27 @@
     drop
   )
 
-        
+  (func $set-timeout (param anyref)
+    
+  )
+
   {init_code}
 
-  (func $outer_init
+  (func $main_loop
+    (loop $main_loop
+    )
+  )
+
+  (func $outer_init (result i32)
     (local $call_arguments (ref $JSArgs))
     (local $error anyref)
     (local $temp_arg anyref)
     try
       (call $init)
+
+      (call $main_loop)
+
+      (return (i32.const 0))
     catch $JSException
       (local.set $error)
       (array.new $JSArgs (ref.null any) (i32.const 2))
@@ -1605,10 +1646,18 @@
       (array.set $JSArgs (local.get $call_arguments) (i32.const 0) (local.get $temp_arg))
       (array.set $JSArgs (local.get $call_arguments) (i32.const 1) (local.get $error))
 
-      (call $log (local.get $call_arguments))     
-      (call $proc_exit (i32.const 1))
+      (call $log (local.get $call_arguments))
+      (return (i32.const 1))
     end
+
+    (i32.const 0)
   )
 
-  (export "_start" (func $outer_init))
+  (func $start
+    call $outer_init
+    call $proc_exit
+  )
+
+  (export "wasi:cli/run@0.2.1#run" (func $outer_init))
+  (export "_start" (func $start))
 )

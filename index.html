@@ -23,6 +23,12 @@
           m: {
             t: tagToImport,
           },
+  "wasi:io/poll@0.2.1": {
+    "poll": function() {},
+  },
+  "wasi:clocks/monotonic-clock@0.2.1": {
+    "subscribe-duration": function() {}
+  },
 
           console: { log: (value) => log(`WebAssembly log: ${value}`) },
           "wasi_snapshot_preview1": {
@@ -61,9 +67,10 @@
         //     
         // // Call the start function
         console.time('start');
-        console.log(exports._start());
+        let result = exports["wasi:cli/run@0.2.1#run"]();
+        console.log("result: ", result);
         console.timeEnd('start');
-        //
+
         log("Start function called. Check the WebAssembly log above for the result.");
         // }).catch(error => {
         //   debugger
