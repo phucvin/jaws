@@ -7,9 +7,9 @@
   ;;(import "console" "log" (func $log_value (param i32)))
 
   ;;(import "wasi:io/poll@0.2.1" "[method]pollable.ready" (func $poll-ready (param i32) (result i32)))
-  (;(import "wasi:io/poll@0.2.1" "poll" (func $poll-many (param i32 i32 i32)));)
+  (import "wasi:io/poll@0.2.1" "poll" (func $poll-many (param i32 i32 i32)))
 
-  (;(import "wasi:clocks/monotonic-clock@0.2.1" "subscribe-duration" (func $subscribe-duration (param i64) (result i32)));)
+  (import "wasi:clocks/monotonic-clock@0.2.1" "subscribe-duration" (func $subscribe-duration (param i64) (result i32)))
 
   ;; 64KB
   (memory (export "memory") 1)
@@ -17,11 +17,7 @@
   (tag $InternalException (type 0))
   (tag $JSException (type 1))
 
-  (global $free_memory_offset i32 (i32.const {free_memory_offset}))
-
-  (type $I32Array (array (mut i32)))
-  (global $pollables (mut (ref $I32Array))
-      (array.new $I32Array (i32.const -1) (i32.const 10)))
+  (global $free_memory_offset (mut i32) (i32.const {free_memory_offset}))
 
   ;; Types that can be passed as reference types:
   ;; i31ref 0 - false
@@ -140,6 +136,31 @@
   (type $Array (struct
     (field $array (mut (ref $AnyrefArray)))
   ))
+
+  (type $PollableFunction
+    (func 
+      (param $scope (ref $Scope))
+      (param $this anyref)
+      (result anyref)
+    )
+  )
+
+  (type $Pollable (struct
+    (field $id i32)
+    (field $func (mut anyref))
+  ))
+
+  (type $PollablesArray (array (mut (ref null $Pollable))))
+
+  (global $pollables (mut (ref $PollablesArray))
+      (array.new $PollablesArray (ref.null $Pollable) (i32.const 2)))
+
+  (func $new-pollable (param $id i32) (param $func anyref) (result (ref $Pollable))
+    (struct.new $Pollable
+      (local.get $id)
+      (local.get $func)
+    )
+  )
 
   {additional_functions}
 
@@ -715,7 +736,7 @@
     (i32.const -1)
   )
 
-  (func $call_function (param $scope (ref $Scope)) (param $func anyref) (param $this anyref) (param $arguments (ref null $JSArgs)) (result anyref)
+  (func $call_function (param $func anyref) (param $this anyref) (param $arguments (ref null $JSArgs)) (result anyref)
     (local $function (ref $Function))
     (local $js_func (ref $JSFunc))
 
@@ -1616,25 +1637,305 @@
     drop
   )
 
-  (func $set-timeout (param anyref)
-    
+  (func $add-pollable (param $pollable (ref $Pollable)) (result i32)
+    (local $len i32)
+    (local $i i32)
+    (local $old_pollables (ref $PollablesArray))
+
+    (local.set $len (array.len (global.get $pollables)))
+    (local.set $i (i32.const 0))
+
+    (block $break (loop $find
+      (br_if $break (i32.ge_u (local.get $i) (local.get $len)))
+      
+      (array.get $PollablesArray (global.get $pollables) (local.get $i))
+      (if (ref.test nullref)
+        (then
+          ;; we found a null value, let's insert here
+          (array.set $PollablesArray
+            (global.get $pollables)
+            (local.get $i)
+            (local.get $pollable))
+
+          (struct.get $Pollable $id (local.get $pollable))
+          (return)
+        ))
+      
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $find)
+    ))
+  
+    ;; we haven't found any free space, let's double the array and try again 
+    (local.set $old_pollables (global.get $pollables))
+    (global.set $pollables
+      (array.new $PollablesArray (ref.null $Pollable) (i32.mul (local.get $len) (i32.const 2))))
+
+    (array.copy
+      $PollablesArray            ;; dest type
+      $PollablesArray            ;; source type
+      (global.get $pollables)    ;; dest array
+      (i32.const 0)              ;; dest offset
+      (local.get $old_pollables) ;; source array
+      (i32.const 0)              ;; source data offest
+      (local.get $len)           ;; source data length
+    )
+ 
+    (call $add-pollable (local.get $pollable))
+  )
+
+  ;; (func $pollables-empty (result i32)
+  ;;   (local $len i32)
+  ;;   (local $i i32)
+
+  ;;   (local.set $len (array.len (global.get $pollables)))
+  ;;   (local.set $i (i32.const 0))
+
+  ;;   (block $break (loop $find
+  ;;     (br_if $break (i32.ge_s (local.get $i) (local.get $len)))
+  ;;     
+  ;;     (array.get $PollablesArray (global.get $pollables) (local.get $i))
+  ;;     (if (i32.eqz (ref.test nullref))
+  ;;       (then
+  ;;         ;; non null value, return false
+  ;;         (return (i32.const 0))
+  ;;       ))
+  ;;     
+  ;;     (local.set $i (i32.add (local.get $i) (i32.const 1)))
+  ;;     (br $find)
+  ;;   ))
+
+  ;;   (return (i32.const 1))
+  ;; )
+
+  (func $find-pollable (param $id i32) (result i32)
+    (local $len i32)
+    (local $i i32)
+    (local $current (ref null $Pollable))
+
+    (local.set $len (array.len (global.get $pollables)))
+    (local.set $i (i32.const 0))
+
+    (block $break (loop $find
+      (br_if $break (i32.ge_u (local.get $i) (local.get $len)))
+      
+      (array.get $PollablesArray (global.get $pollables) (local.get $i))
+      (local.set $current)
+      (if (i32.eqz (ref.test nullref (local.get $current)))
+        (then
+          (if (i32.eq
+            (local.get $id)
+            (struct.get $Pollable $id (local.get $current)))
+              (then
+            (return (local.get $i))))))
+      
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $find)
+    ))
+
+    (return (i32.const -1))
+  )
+
+  (func $execute-pollables (param $offset i32)
+    (local $len i32)
+    (local $index i32)
+    (local $i i32)
+    (local $func anyref)
+
+    (local.set $len (i32.load (local.get $offset)))
+    (local.set $offset (i32.add (local.get $offset) (i32.const 4)))
+    (local.set $i (i32.const 0))
+
+    (block $break (loop $find
+      (br_if $break (i32.ge_u (local.get $i) (local.get $len)))
+
+      (i32.load (local.get $offset))
+      (call $find-pollable)
+      (local.set $index)
+
+      (if (i32.ne
+            (local.get $index)
+            (i32.const -1))
+        (then
+          (array.get $PollablesArray (global.get $pollables) (local.get $index))
+          (struct.get $Pollable $func)
+          (local.tee $func)
+          (if (ref.test (ref $Function))
+            (then
+              (local.get $func) ;; function to call
+              (ref.null any) ;; this, TODO: we need to handle this differently for arrow functions or binding
+              (array.new $JSArgs (ref.null any) (i32.const 0))
+              (call $call_function)
+              (drop)
+              (return)
+            )
+          )
+          ;; TODO: handle async variant
+
+          (throw $JSException (ref.i31 (i32.const 20002)))
+      ))
+
+      (local.set $offset (i32.add (local.get $offset) (i32.const 4)))
+
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $find)
+    ))
+  )
+
+  (func $clear-pollables (param $offset i32)
+    (local $len i32)
+    (local $index i32)
+    (local $i i32)
+
+    (local.set $len (i32.load (local.get $offset)))
+    (local.set $offset (i32.add (local.get $offset) (i32.const 4)))
+    (local.set $i (i32.const 0))
+
+    (block $break (loop $find
+      (br_if $break (i32.ge_u (local.get $i) (local.get $len)))
+
+      (i32.load (local.get $offset))
+      (call $find-pollable)
+      (local.set $index)
+
+      (if (i32.ne
+            (local.get $index)
+            (i32.const -1))
+        (then
+          (array.set $PollablesArray (global.get $pollables) (local.get $index) (ref.null $Pollable)))
+      )
+
+      (local.set $offset (i32.add (local.get $offset) (i32.const 4)))
+
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $find)
+    ))
+  )
+
+  (func $store-pollables (param $offset i32) (result i32)
+    (local $len i32)
+    (local $i i32)
+    (local $current (ref null $Pollable))
+    (local $stored_length i32)
+
+    (local.set $len (array.len (global.get $pollables)))
+    (local.set $i (i32.const 0))
+    (local.set $stored_length (i32.const 0))
+
+    (block $break (loop $find
+      (br_if $break (i32.ge_u (local.get $i) (local.get $len)))
+      
+      (array.get $PollablesArray (global.get $pollables) (local.get $i))
+      (local.set $current)
+      (if (i32.eqz (ref.test nullref (local.get $current)))
+        (then
+          (i32.store (local.get $offset) (struct.get $Pollable $id (local.get $current)))
+          (local.set $offset (i32.add (local.get $offset) (i32.const 4)))
+          (local.set $stored_length (i32.add (local.get $stored_length) (i32.const 1)))
+        )
+      )
+      
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $find)
+    ))
+
+    (local.get $stored_length)
+  )
+
+  (func $set-timeout (param $func anyref) (param $duration_arg anyref) (result (ref $Number))
+    (local $duration i64)
+
+    (if (ref.test (ref $Function) (local.get $func))
+      (then
+
+        (if (ref.test (ref $Number) (local.get $duration_arg))
+          (then
+            (ref.cast (ref $Number) (local.get $duration_arg))
+            (struct.get $Number $value)
+            (i64.trunc_f64_s)
+            (i64.const 1000000) ;; javascript uses milliseconds, in here we have nanoseconds
+            (i64.mul)
+            (local.set $duration)
+            ;; TODO: handle strings by converting to $Number
+          )
+          (else
+            (local.set $duration (i64.const 0))
+          ))
+
+        (call $subscribe-duration (local.get $duration))
+        (local.get $func)
+        (call $new-pollable)
+        (call $add-pollable)
+        (f64.convert_i32_s)
+        (call $new_number)
+        ;; return the pollable id
+        (return)
+      )
+    )
+
+    ;; for now I'm just throwing numbers, so I can roughly find out what happened
+    ;; but eventually this should throw actual JS errors
+    (throw $JSException (ref.i31 (i32.const 20001)))
   )
 
   {init_code}
 
+  ;; This is not how the run loop will run in the future. `poll-many`
+  ;; is supposed to wait for the next pollable to resolve, thus blocking
+  ;; the execution. In order to do that on the host there has to be a way
+  ;; to call async functions. The problem is that passing an async function
+  ;; as an WebAssembly import doesn't await it. There are ways around it,
+  ;; for example to use asyncify, but `wasm-opt` with asyncify crashes
+  ;; when trying to optimize the project (I'm guessing due to exception handling
+  ;; or GC proposals). So instead of running in a loop (like the commented code would suggest)
+  ;; we're calling poll-many and the poll-many polyfill will call main_loop again
+  ;;
+  ;; This should be fixed once th code can be executed on a runtime with proper
+  ;; WASI preview2 support
   (func $main_loop
-    (loop $main_loop
-    )
+    (local $length i32)
+    (local $offset i32)
+    (;(block $break (loop $main_loop;)
+      (local.set $offset (global.get $free_memory_offset))
+      ;; we don't want the polables memory overwritten, so let's shift the offset by the length of pollables
+      (global.set $free_memory_offset 
+        (i32.add
+          (local.get $offset)
+          (i32.add
+            (i32.mul
+              (i32.load (local.get $offset))
+              (i32.const 4))
+            (i32.const 4)))) ;; we have N 32bit numbers + length
+
+      (call $execute-pollables (local.get $offset))
+      (call $clear-pollables (local.get $offset))
+
+      ;; bring back the original free_memory_offset, so we don't waste memory
+      (global.set $free_memory_offset (local.get $offset))
+
+      (call $store-pollables (global.get $free_memory_offset))
+      (local.set $length)
+
+      (call $poll-many (global.get $free_memory_offset) (local.get $length) (global.get $free_memory_offset))
+
+      ;;(call $clear-pollables (global.get $free_memory_offset))
+    (;  (br_if $break (call $pollables-empty));)
+    (;  (br $main_loop);)
+    (;));)
   )
 
   (func $outer_init (result i32)
     (local $call_arguments (ref $JSArgs))
     (local $error anyref)
     (local $temp_arg anyref)
+    (local $length i32)
     try
       (call $init)
 
-      (call $main_loop)
+      (call $store-pollables (global.get $free_memory_offset))
+      (local.set $length)
+
+      ;; if there are any pollables, this will call $main_loop, otherwise it will exit
+      (call $poll-many (global.get $free_memory_offset) (local.get $length) (global.get $free_memory_offset))
 
       (return (i32.const 0))
     catch $JSException
@@ -1660,4 +1961,5 @@
 
   (export "wasi:cli/run@0.2.1#run" (func $outer_init))
   (export "_start" (func $start))
+  (export "main_loop" (func $main_loop))
 )

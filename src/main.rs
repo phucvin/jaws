@@ -268,58 +268,83 @@ impl WasmTranslator {
         let function_name = call.function().to_interned_string(&self.interner);
         let mut instructions = Vec::new();
 
-        // Add a local for arguments to the current function
-        let call_arguments = self
-            .current_function()
-            .add_local("$call_arguments", "(ref $JSArgs)");
-        let temp_arg = self.current_function().add_local("$temp_arg", "anyref");
+        if function_name == "setTimeout" {
+            if let Some(callback) = call.args().get(0) {
+                let callback_var = self.current_function().add_local("$callback", "anyref");
+                let duration_var = self.current_function().add_local("$duration", "anyref");
+                instructions.push(self.translate_expression(callback, true));
+                instructions.push(W::local_set(&callback_var));
 
-        // Create the arguments array
-        let args_count = call.args().len() as i32;
-        instructions.push(W::array_new(
-            "$JSArgs",
-            W::ref_null("any"),
-            W::i32_const(args_count),
-        ));
-        instructions.push(W::local_set(&call_arguments));
+                let time = if let Some(time) = call.args().get(1) {
+                    self.translate_expression(time, true)
+                } else {
+                    // pass undefined
+                    W::ref_null("any")
+                };
+                instructions.push(time);
+                instructions.push(W::local_set(&duration_var));
 
-        // Populate the arguments array
-        for (index, arg) in call.args().iter().enumerate() {
-            let arg_instruction = self.translate_expression(arg, true);
-            instructions.push(W::list(vec![
-                arg_instruction,
-                W::local_set(&temp_arg),
-                W::instruction(
-                    "array.set",
-                    vec![
-                        W::r#type("$JSArgs"),
-                        W::local_get(&call_arguments),
-                        W::i32_const(index as i32),
-                        W::local_get(&temp_arg),
-                    ],
-                ),
-            ]));
-        }
-
-        if function_name == "console.log" {
-            instructions.push(W::call("$log", vec![W::local_get(&call_arguments)]));
-            instructions.push(W::i32_const(1));
+                // the rest of arguments doesn't matter
+                instructions.push(W::call(
+                    "$set-timeout",
+                    vec![W::local_get(&callback_var), W::local_get(&duration_var)],
+                ));
+            } else {
+                // TODO: throw TypeError
+            }
         } else {
-            // Translate the function expression
-            let function_local = self.current_function().add_local("$function", "anyref");
-            instructions.push(self.translate_expression(call.function(), true));
-            instructions.push(W::local_set(&function_local));
+            // Add a local for arguments to the current function
+            let call_arguments = self
+                .current_function()
+                .add_local("$call_arguments", "(ref $JSArgs)");
+            let temp_arg = self.current_function().add_local("$temp_arg", "anyref");
 
-            // Call the function
-            instructions.push(W::call(
-                "$call_function",
-                vec![
-                    W::local_get("$scope"),
-                    W::local_get(&function_local),
-                    get_this,
-                    W::local_get(&call_arguments),
-                ],
+            // Create the arguments array
+            let args_count = call.args().len() as i32;
+            instructions.push(W::array_new(
+                "$JSArgs",
+                W::ref_null("any"),
+                W::i32_const(args_count),
             ));
+            instructions.push(W::local_set(&call_arguments));
+
+            // Populate the arguments array
+            for (index, arg) in call.args().iter().enumerate() {
+                let arg_instruction = self.translate_expression(arg, true);
+                instructions.push(W::list(vec![
+                    arg_instruction,
+                    W::local_set(&temp_arg),
+                    W::instruction(
+                        "array.set",
+                        vec![
+                            W::r#type("$JSArgs"),
+                            W::local_get(&call_arguments),
+                            W::i32_const(index as i32),
+                            W::local_get(&temp_arg),
+                        ],
+                    ),
+                ]));
+            }
+
+            if function_name == "console.log" {
+                instructions.push(W::call("$log", vec![W::local_get(&call_arguments)]));
+                instructions.push(W::i32_const(1));
+            } else {
+                // Translate the function expression
+                let function_local = self.current_function().add_local("$function", "anyref");
+                instructions.push(self.translate_expression(call.function(), true));
+                instructions.push(W::local_set(&function_local));
+
+                // Call the function
+                instructions.push(W::call(
+                    "$call_function",
+                    vec![
+                        W::local_get(&function_local),
+                        get_this,
+                        W::local_get(&call_arguments),
+                    ],
+                ));
+            }
         }
 
         if !will_use_return {
@@ -580,13 +605,12 @@ impl WasmTranslator {
     }
 
     fn translate_await_expression(&mut self, await_expression: &Await) -> Box<W> {
-        todo!();
         println!("AWAIT: {await_expression:#?}");
+        todo!();
         W::empty()
     }
 
     fn translate_async_function(&mut self, async_function: &AsyncFunction) -> Box<W> {
-        todo!();
         self.translate_function_generic(
             async_function.name(),
             async_function.parameters(),

@@ -3,10 +3,15 @@ set -o pipefail
 
 # Parse options
 CARGO_RUN=0
+USE_NODE=0
 while [[ $# -gt 0 ]]; do
   case $1 in
   --cargo-run)
     CARGO_RUN=1
+    shift
+    ;;
+  --node)
+    USE_NODE=1
     shift
     ;;
   *)
@@ -40,12 +45,22 @@ generate_wasm() {
   #   wasm-tools component embed --all-features $JS2WASM_DIR/wit --world js2wasm $JS2WASM_DIR/wat/generated.wat -t -o wasm/generated.core.wasm && \
   #   wasm-tools component new $JS2WASM_DIR/wasm/generated.core.wasm -o $JS2WASM_DIR/wasm/generated.component.wasm
 }
+
+run_wasm() {
+
+  if [ $USE_NODE -eq 1 ]; then
+    node run.js $JS2WASM_DIR/wasm/generated.wasm
+  else
+    wasmedge run --enable-gc --enable-exception-handling $JS2WASM_DIR/wasm/generated.wasm | tail -n +2
+  fi
+}
+
 # Convert WAT to WASM
 if ! generate_wasm; then
   exit 100
 fi
 
 # Run the WASM file
-if ! wasmedge run --enable-gc --enable-exception-handling $JS2WASM_DIR/wasm/generated.wasm | tail -n +2; then
+if ! run_wasm; then
   exit 101
 fi
