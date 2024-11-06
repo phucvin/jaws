@@ -109,6 +109,12 @@ impl WasmTranslator {
         self.add_new_symbol(sym, &self.interner.resolve(sym).unwrap().to_string())
     }
 
+    fn add_string(&mut self, s: impl Into<String>) -> i32 {
+        let s: String = s.into();
+        let sym = self.interner.get_or_intern(JStrRef::Utf8(&s));
+        self.add_new_symbol(sym, &s)
+    }
+
     fn add_identifier(&mut self, identifier: &Identifier) -> i32 {
         self.add_symbol(identifier.sym())
     }
@@ -165,7 +171,7 @@ impl WasmTranslator {
         self.current_function()
             .add_param("$this".to_string(), "anyref".to_string());
         self.current_function()
-            .add_param("$arguments".to_string(), "(ref null $JSArgs)".to_string());
+            .add_param("$arguments".to_string(), "(ref $JSArgs)".to_string());
         self.current_function().add_result("anyref".to_string());
 
         self.current_function()
@@ -974,20 +980,6 @@ impl WasmTranslator {
         }
     }
 
-    fn data(&self) -> String {
-        // self.data_entries.join("\n")
-        self.data_entries
-            .iter()
-            .map(|(offset, value)| {
-                format!(
-                    "(data $d{offset} (i32.const {offset}) \"{value}\")\n",
-                    offset = offset,
-                    value = value
-                )
-            })
-            .collect()
-    }
-
     fn additional_functions(&self) -> String {
         "".into()
     }
@@ -1211,25 +1203,35 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow!("JS2WASM parsing error: {e}"))?;
 
     let mut translator = WasmTranslator::new(interner);
-    for type_of_value in [
-        "undefined",
-        "object",
-        "boolean",
-        "number",
-        "bigint",
-        "string",
-        "symbol",
-        "function",
-        "object",
-    ]
-    .iter()
-    {
-        let sym = translator
-            .interner
-            .get_or_intern(JStrRef::Utf8(type_of_value));
-        translator.add_symbol(sym);
-    }
-
+    // for type_of_value in [
+    //     "error encountered",
+    //     "undefined",
+    //     "object",
+    //     "boolean",
+    //     "number",
+    //     "bigint",
+    //     "string",
+    //     "symbol",
+    //     "function",
+    //     "null",
+    //     "true",
+    //     "false",
+    //     "object",
+    //     "then",
+    //     "catch",
+    //     "finally",
+    //     "toString",
+    //     " ",
+    //     "\\n",
+    // ]
+    // .iter()
+    // {
+    //     let sym = translator
+    //         .interner
+    //         .get_or_intern(JStrRef::Utf8(type_of_value));
+    //     translator.add_symbol(sym);
+    // }
+    //
     // println!("{ast:#?}");
     ast.visit_with(&mut translator);
     // exit $init function
@@ -1253,8 +1255,7 @@ fn main() -> anyhow::Result<()> {
     let module = wat_template::generate_wat_template(
         translator.additional_functions(),
         module,
-        translator.data(),
-        translator.data_offset + (4 - translator.data_offset % 4),
+        &mut translator,
     );
 
     let js2wasm_dir = std::env::var("JS2WASM_DIR").unwrap_or(".".into());

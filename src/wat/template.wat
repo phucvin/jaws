@@ -17,7 +17,9 @@
   (tag $InternalException (type 0))
   (tag $JSException (type 1))
 
-  (global $free_memory_offset (mut i32) (i32.const {free_memory_offset}))
+  (global $free_memory_offset (mut i32) (i32.const {{free_memory_offset}}))
+
+  (data (i32.const 0) "\n")
 
   ;; Types that can be passed as reference types:
   ;; i31ref 0 - false
@@ -25,24 +27,7 @@
   ;; i31ref 2 - null
   ;; null     - undefined
 
-  (data (i32.const 172) "error encountered")
-  ;; define new line in memory
-  (data (i32.const 192) "\n")
-  ;; define empty string in memory
-  (data (i32.const 196) " ")
-  (data (i32.const 200) "undefined")
-  (data (i32.const 212) "object")
-  (data (i32.const 220) "boolean")
-  (data (i32.const 228) "number")
-  (data (i32.const 236) "bigint")
-  (data (i32.const 244) "string")
-  (data (i32.const 252) "symbol")
-  (data (i32.const 260) "function")
-  (data (i32.const 268) "null")
-  (data (i32.const 272) "true")
-  (data (i32.const 276) "false")
-
-  {data}
+  {{ data_entries }}
 
   ;; Memory management functions required by the Component Model
   (func $cabi_realloc (export "cabi_realloc")
@@ -109,7 +94,7 @@
     (func 
       (param $scope (ref $Scope))
       (param $this anyref)
-      (param $arguments (ref null $JSArgs))
+      (param $arguments (ref $JSArgs))
       (result anyref)
     )
   )
@@ -152,6 +137,11 @@
 
   (type $PollablesArray (array (mut (ref null $Pollable))))
 
+  (type $Promise (struct
+    (field $properties (mut (ref $HashMap)))
+    (field $prototype (mut (ref $Object))) ;; the prototype here cannot be changed
+  ))
+
   (global $pollables (mut (ref $PollablesArray))
       (array.new $PollablesArray (ref.null $Pollable) (i32.const 2)))
 
@@ -162,7 +152,23 @@
     )
   )
 
-  {additional_functions}
+  (;(global $promise-prototype (ref $Object);)
+  (;  (call $create-promise-prototype));)
+  (;;)
+  (;(func $new-promise (result (ref $Promise));)
+  (;  (struct.new $Promise;)
+  (;    (call $new_hashmap);)
+  (;    (global.get $promise-prototype);)
+  (;  );)
+  (;);)
+  (;;)
+  (;(func $create-promise-prototype (result (ref $Object));)
+  (;  (local $object (ref $Object));)
+  (;  (local.set $object (call $new_object));)
+  (;;)
+  (;);)
+
+  {{additional_functions}}
 
   ;; TODO: we could use data from (data) entries for creating strings, but in order
   ;; to do that there would have to be a function with mapping between data labels
@@ -736,7 +742,7 @@
     (i32.const -1)
   )
 
-  (func $call_function (param $func anyref) (param $this anyref) (param $arguments (ref null $JSArgs)) (result anyref)
+  (func $call_function (param $func anyref) (param $this anyref) (param $arguments (ref $JSArgs)) (result anyref)
     (local $function (ref $Function))
     (local $js_func (ref $JSFunc))
 
@@ -1000,7 +1006,7 @@
   (func $type_of (param $arg anyref) (result (ref $StaticString))
     (if (ref.test nullref (local.get $arg))
       (then
-        (return (call $new_static_string (i32.const 200) (i32.const 9)))
+        (return (call $new_static_string (i32.const {{ data(str="undefined") }}) (i32.const {{ data_length() }})))
       )
     )
 
@@ -1010,10 +1016,10 @@
               (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg))) (i32.const 0))
               (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg))) (i32.const 1)))
           (then
-            (return (call $new_static_string (i32.const 220) (i32.const 7)))
+            (return (call $new_static_string (i32.const {{ data(str="boolean") }}) (i32.const {{ data_length() }})))
           )
           (else
-            (return (call $new_static_string (i32.const 200) (i32.const 9)))
+            (return (call $new_static_string (i32.const {{ data(str="undefined") }}) (i32.const {{ data_length() }})))
           )
         )
       )
@@ -1021,25 +1027,25 @@
 
     (if (ref.test (ref $Number) (local.get $arg))
       (then
-        (return (call $new_static_string (i32.const 228) (i32.const 6))))
+        (return (call $new_static_string (i32.const {{ data(str="number") }}) (i32.const {{ data_length() }}))))
     )
 
     (if (ref.test (ref $Object) (local.get $arg))
       (then
-        (return (call $new_static_string (i32.const 212) (i32.const 6))))
+        (return (call $new_static_string (i32.const {{ data(str="object") }}) (i32.const {{ data_length() }}))))
     )
 
     (if (ref.test (ref $StaticString) (local.get $arg))
       (then
-        (return (call $new_static_string (i32.const 244) (i32.const 6))))
+        (return (call $new_static_string (i32.const {{ data(str="string") }}) (i32.const {{ data_length() }}))))
     )
 
     (if (ref.test (ref $Function) (local.get $arg))
       (then
-        (return (call $new_static_string (i32.const 260) (i32.const 8))))
+        (return (call $new_static_string (i32.const {{ data(str="function") }}) (i32.const {{ data_length() }}))))
     )
 
-    (return (call $new_static_string (i32.const 200) (i32.const 9)))
+    (return (call $new_static_string (i32.const {{ data(str="undefined") }}) (i32.const {{ data_length() }})))
   )
 
   (func $less_than (param $arg1 anyref) (param $arg2 anyref) (result i31ref)
@@ -1358,11 +1364,11 @@
             ;; Store iovector data
             (i32.store 
               (local.get $iovectors_offset)
-              (i32.const 200)
+              (i32.const {{ data(str="undefined") }})
             )
             (i32.store 
               (i32.add (local.get $iovectors_offset) (i32.const 4))
-              (i32.const 9)
+              (i32.const {{ data_length() }})
             )
             
             (local.set $iovectors_offset 
@@ -1389,11 +1395,11 @@
                 ;; Store iovector data
                 (i32.store
                   (local.get $iovectors_offset)
-                  (i32.const 276)
+                  (i32.const {{ data(str="null") }})
                 )
                 (i32.store 
                   (i32.add (local.get $iovectors_offset) (i32.const 4))
-                  (i32.const 5)
+                  (i32.const {{ data_length() }})
                 )
                 
                 (local.set $iovectors_offset 
@@ -1412,11 +1418,11 @@
                 ;; Store iovector data
                 (i32.store
                   (local.get $iovectors_offset)
-                  (i32.const 272)
+                  (i32.const {{ data(str="true") }})
                 )
                 (i32.store 
                   (i32.add (local.get $iovectors_offset) (i32.const 4))
-                  (i32.const 4)
+                  (i32.const {{ data_length() }})
                 )
                 
                 (local.set $iovectors_offset 
@@ -1435,11 +1441,11 @@
                 ;; Store iovector data
                 (i32.store
                   (local.get $iovectors_offset)
-                  (i32.const 268)
+                  (i32.const {{ data(str="false") }})
                 )
                 (i32.store 
                   (i32.add (local.get $iovectors_offset) (i32.const 4))
-                  (i32.const 4)
+                  (i32.const {{ data_length() }})
                 )
                 
                 (local.set $iovectors_offset 
@@ -1606,10 +1612,10 @@
         )
 
         ;; after each argument, but the last, we put in a space
-        (i32.store (local.get $iovectors_offset) (i32.const 196))
+        (i32.store (local.get $iovectors_offset) (i32.const {{ data(str=" ") }}))
         (i32.store 
           (i32.add (local.get $iovectors_offset) (i32.const 4))
-          (i32.const 1)
+          (i32.const {{ data_length() }})
         )
  
         (local.set $iovectors_offset 
@@ -1621,10 +1627,10 @@
     )
 
     ;; put newline at the end
-    (i32.store (local.get $iovectors_offset) (i32.const 192))
+    (i32.store (local.get $iovectors_offset) (i32.const {{ data(str="\n") }}))
     (i32.store 
       (i32.add (local.get $iovectors_offset) (i32.const 4))
-      (i32.const 1)
+      (i32.const {{ data_length() }})
     )
     
     ;; Call write with all accumulated iovectors
@@ -1877,7 +1883,7 @@
     (throw $JSException (ref.i31 (i32.const 20001)))
   )
 
-  {init_code}
+  {{init_code}}
 
   ;; This is not how the run loop will run in the future. `poll-many`
   ;; is supposed to wait for the next pollable to resolve, thus blocking
@@ -1942,7 +1948,7 @@
       (local.set $error)
       (array.new $JSArgs (ref.null any) (i32.const 2))
       (local.set $call_arguments)
-      (call $new_static_string (i32.const 172) (i32.const 17))
+      (call $new_static_string (i32.const {{ data(str="error encountered") }}) (i32.const {{ data_length() }}))
       (local.set $temp_arg)
       (array.set $JSArgs (local.get $call_arguments) (i32.const 0) (local.get $temp_arg))
       (array.set $JSArgs (local.get $call_arguments) (i32.const 1) (local.get $error))
