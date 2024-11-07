@@ -18,6 +18,7 @@
   (tag $JSException (type 1))
 
   (global $free_memory_offset (mut i32) (i32.const {{free_memory_offset}}))
+  (global $scope (mut (ref null $Scope)) (ref.null $Scope))
 
   (data (i32.const 0) "\n")
 
@@ -102,6 +103,7 @@
   (type $Function (struct
     (field $scope (mut (ref $Scope)))
     (field $func (mut (ref $JSFunc)))
+    (field $this (mut anyref)) ;; some functions have a default this
     (field $properties (mut (ref $HashMap)))
   ))
 
@@ -137,10 +139,22 @@
 
   (type $PollablesArray (array (mut (ref null $Pollable))))
 
-  (type $Promise (struct
-    (field $properties (mut (ref $HashMap)))
-    (field $prototype (mut (ref $Object))) ;; the prototype here cannot be changed
-  ))
+  (type $FunctionArray (array (mut (ref null $Function))))
+  (rec
+    (type $PromisesArray (array (mut (ref null $Promise))))
+    (type $Promise (struct
+      (field $properties (mut (ref $HashMap)))
+      (field $prototype (mut (ref $Object))) ;; the prototype here cannot be changed
+      (field $success-result (mut anyref))
+      (field $error-result (mut anyref))
+      (field $then-callback (mut (ref null $Function)))
+      (field $catch-callback (mut (ref null $Function)))
+      (field $finally-callback (mut (ref null $Function)))
+      (field $resolved (mut i32))
+      (field $errored (mut i32))
+      (field $chained-promises (mut (ref $PromisesArray)))
+    ))
+  )
 
   (global $pollables (mut (ref $PollablesArray))
       (array.new $PollablesArray (ref.null $Pollable) (i32.const 2)))
@@ -152,21 +166,623 @@
     )
   )
 
-  (;(global $promise-prototype (ref $Object);)
-  (;  (call $create-promise-prototype));)
-  (;;)
-  (;(func $new-promise (result (ref $Promise));)
-  (;  (struct.new $Promise;)
-  (;    (call $new_hashmap);)
-  (;    (global.get $promise-prototype);)
-  (;  );)
-  (;);)
-  (;;)
-  (;(func $create-promise-prototype (result (ref $Object));)
-  (;  (local $object (ref $Object));)
-  (;  (local.set $object (call $new_object));)
-  (;;)
-  (;);)
+  (global $promise-prototype (mut (ref null $Object)) (ref.null $Object))
+
+  (func $new-promise (result (ref $Promise))
+    (struct.new $Promise
+      (call $new_hashmap)
+      (ref.cast (ref $Object) (global.get $promise-prototype))
+      (ref.null $Object)
+      (ref.null $Object)
+      ;; TODO: is there a way to create an array without any elements, but not
+      ;; force them to be null?
+      (ref.null $Function)
+      (ref.null $Function)
+      (ref.null $Function)
+      (i32.const 0)
+      (i32.const 0)
+      (array.new $PromisesArray (ref.null $Promise) (i32.const 1))
+    )
+  )
+
+  (func $create-promise-prototype (result (ref $Object))
+    (local $object (ref $Object))
+    (local.set $object (call $new_object))
+
+    (local.get $object)
+    (i32.const {{ data(str="then") }})
+    (call $new_function (ref.cast (ref $Scope) (global.get $scope)) (ref.func $Promise-then) (ref.null any))
+    (call $set_property)
+
+    (local.get $object)
+    (i32.const {{ data(str="catch") }})
+    (call $new_function (ref.cast (ref $Scope) (global.get $scope)) (ref.func $Promise-catch) (ref.null any))
+    (call $set_property)
+
+    (local.get $object)
+    (i32.const {{ data(str="finally") }})
+    (call $new_function (ref.cast (ref $Scope) (global.get $scope)) (ref.func $Promise-finally) (ref.null any))
+    (call $set_property)
+
+    (return (local.get $object))
+  )
+
+  (func $Promise-then
+    (type $JSFunc)
+    (param $scope (ref $Scope))
+    (param $this anyref)
+    (param $arguments (ref $JSArgs))
+    (result anyref)
+
+    (local $resolver (ref $Function))
+    (local $new-promise (ref $Promise))
+    (local $promise (ref $Promise))
+    (local $callback-anyref anyref)
+    (local $callback (ref $Function))
+    (local $callback-arguments (ref $JSArgs))
+
+    (local.set $new-promise (call $new-promise))
+    (local.set $promise (ref.cast (ref $Promise) (local.get $this)))
+
+    (array.len (local.get $arguments))
+    (i32.eqz)
+    (if (then
+      ;; no functions to register, just return an empty promise
+      (return (local.get $new-promise))
+    ))
+
+    (array.len (local.get $arguments))
+    (i32.const 0)
+    (i32.gt_s)
+    (if (then
+      ;; we have at least one argument, so onresolved is passed
+      (array.get $JSArgs (local.get $arguments) (i32.const 0))
+      (local.tee $callback-anyref)
+      (if (ref.test (ref $Function))
+        (then
+          ;; set the then callback on the new promise
+          (struct.set $Promise $then-callback (local.get $new-promise) (ref.cast (ref $Function) (local.get $callback-anyref)))
+        )
+      )
+    ))
+
+    (array.len (local.get $arguments))
+    (i32.const 1)
+    (i32.gt_s)
+    (if (then
+      ;; we have the second argument, onrejected
+      (array.get $JSArgs (local.get $arguments) (i32.const 1))
+      (local.tee $callback-anyref)
+      (if (ref.test (ref $Function))
+        (then
+          ;; set the then callback on the new promise
+          (struct.set $Promise $catch-callback (local.get $new-promise) (ref.cast (ref $Function) (local.get $callback-anyref)))
+        )
+      )
+    ))
+
+    (if (i32.eqz (struct.get $Promise $resolved (local.get $promise)))
+      (then
+        ;; it's not resolved, check if it not errored
+        (if (i32.eqz (struct.get $Promise $errored (local.get $promise)))
+          (then
+            (call $add-to-promise-chain
+              (local.get $promise) ;; target promise
+              (local.get $new-promise) ;; promise to add
+            )
+          )
+          (else
+            ;; it errored already, evaluate on-rejected
+            (local.get $scope)
+            (struct.get $Promise $error-result (local.get $promise))
+            (local.get $new-promise)
+            (call $evaluate-rejected)
+          )
+        )
+      )
+      (else
+        ;; if it's already resolved, evaluate onresolved
+        (local.get $scope)
+        (struct.get $Promise $success-result (local.get $promise))
+        (local.get $new-promise)
+        (call $evaluate-resolved)
+      )
+    )
+
+    (return (local.get $new-promise))
+  )
+
+  (func $Promise-finally
+    (type $JSFunc)
+    (param $scope (ref $Scope))
+    (param $this anyref)
+    (param $arguments (ref $JSArgs))
+    (result anyref)
+
+    (local $resolver (ref $Function))
+    (local $new-promise (ref $Promise))
+    (local $promise (ref $Promise))
+    (local $callback-anyref anyref)
+    (local $callback (ref $Function))
+    (local $callback-arguments (ref $JSArgs))
+
+    (local.set $new-promise (call $new-promise))
+    (local.set $promise (ref.cast (ref $Promise) (local.get $this)))
+
+    (array.len (local.get $arguments))
+    (i32.eqz)
+    (if (then
+      ;; no functions to register, just return an empty promise
+      (return (local.get $new-promise))
+    ))
+
+    (array.len (local.get $arguments))
+    (i32.const 0)
+    (i32.gt_s)
+    (if (then
+      ;; we have at least one argument, so a callback was passed
+      (array.get $JSArgs (local.get $arguments) (i32.const 0))
+      (local.tee $callback-anyref)
+      (if (ref.test (ref $Function))
+        (then
+          ;; set the then callback on the new promise
+          (struct.set $Promise $finally-callback (local.get $new-promise) (ref.cast (ref $Function) (local.get $callback-anyref)))
+        )
+      )
+    ))
+
+    (if (i32.eqz (struct.get $Promise $resolved (local.get $promise)))
+      (then
+        ;; it's not resolved, check if it not errored
+        (if (i32.eqz (struct.get $Promise $errored (local.get $promise)))
+          (then
+            (call $add-to-promise-chain
+              (local.get $promise) ;; target promise
+              (local.get $new-promise) ;; promise to add
+            )
+          )
+          (else
+            ;; it errored already, evaluate on-rejected
+            (local.get $scope)
+            (struct.get $Promise $error-result (local.get $promise))
+            (local.get $new-promise)
+            (call $evaluate-rejected)
+          )
+        )
+      )
+      (else
+        ;; if it's already resolved, evaluate onresolved
+        (local.get $scope)
+        (struct.get $Promise $success-result (local.get $promise))
+        (local.get $new-promise)
+        (call $evaluate-resolved)
+      )
+    )
+
+    (return (local.get $new-promise))
+  )
+
+  (func $Promise-catch
+    (type $JSFunc)
+    (param $scope (ref $Scope))
+    (param $this anyref)
+    (param $arguments (ref $JSArgs))
+    (result anyref)
+
+    (local $resolver (ref $Function))
+    (local $new-promise (ref $Promise))
+    (local $promise (ref $Promise))
+    (local $callback-anyref anyref)
+    (local $callback (ref $Function))
+    (local $callback-arguments (ref $JSArgs))
+
+    (local.set $new-promise (call $new-promise))
+    (local.set $promise (ref.cast (ref $Promise) (local.get $this)))
+
+    (array.len (local.get $arguments))
+    (i32.eqz)
+    (if (then
+      ;; no functions to register, just return an empty promise
+      (return (local.get $new-promise))
+    ))
+
+    (array.len (local.get $arguments))
+    (i32.const 0)
+    (i32.gt_s)
+    (if (then
+      ;; we have at least one argument, just pass it as a second argument to `then`
+      (ref.null any)
+      (array.get $JSArgs (local.get $arguments) (i32.const 0))
+      (call $create-arguments-2)
+      (local.set $arguments)
+
+      (call $Promise-then (local.get $scope) (local.get $new-promise) (local.get $arguments))
+      (drop)
+    ))
+
+    (return (local.get $new-promise))
+  )
+
+  (func $evaluate-resolved (param $scope (ref $Scope)) (param $previous-result anyref) (param $promise (ref $Promise))
+    (local $arguments (ref $JSArgs))
+    (local $anyref_function anyref)
+    (local $result anyref)
+
+    try
+      (call $create-arguments-1 (local.get $previous-result))
+      (local.set $arguments)
+
+      (struct.get $Promise $finally-callback (local.get $promise))
+      (local.tee $anyref_function)
+      (if (ref.test (ref $Function))
+        (then
+          (ref.cast (ref $Function) (local.get $anyref_function))
+          (ref.null any) ;; this
+          (local.get $arguments)
+          (call $call_function)
+          (local.set $result)
+        )
+      )
+
+      (struct.get $Promise $then-callback (local.get $promise))
+      (local.tee $anyref_function)
+      (if (ref.test (ref $Function))
+        (then
+          (ref.cast (ref $Function) (local.get $anyref_function))
+          (ref.null any) ;; this
+          (local.get $arguments)
+          (call $call_function)
+          (local.set $result)
+        )
+        (else
+          (local.set $result (local.get $previous-result))
+        )
+      )
+
+      ;; reuse $arguments
+      (array.set $JSArgs (local.get $arguments) (i32.const 0) (local.get $result))
+
+      (call $Promise-resolve (local.get $scope) (local.get $promise) (local.get $arguments))
+      (drop)
+    catch $JSException
+      (call $create-arguments-1)
+      (local.set $arguments)
+
+      (call $Promise-reject (local.get $scope) (local.get $promise) (local.get $arguments))
+      (drop)
+    end
+  )
+
+  (func $evaluate-rejected (param $scope (ref $Scope)) (param $previous-result anyref) (param $promise (ref $Promise))
+    (local $arguments (ref $JSArgs))
+    (local $anyref_function anyref)
+    (local $result anyref)
+
+    try
+      (call $create-arguments-1 (local.get $previous-result))
+      (local.set $arguments)
+
+      (struct.get $Promise $finally-callback (local.get $promise))
+      (local.tee $anyref_function)
+      (if (ref.test (ref $Function))
+        (then
+          (ref.cast (ref $Function) (local.get $anyref_function))
+          (ref.null any) ;; this
+          (local.get $arguments)
+          (call $call_function)
+          (local.set $result)
+        )
+      )
+
+      (struct.get $Promise $catch-callback (local.get $promise))
+      (local.tee $anyref_function)
+      (if (ref.test (ref $Function))
+        (then
+          (ref.cast (ref $Function) (local.get $anyref_function))
+          (ref.null any) ;; this
+          (local.get $arguments)
+          (call $call_function)
+          (local.set $result)
+
+          ;; reuse $arguments
+          (array.set $JSArgs (local.get $arguments) (i32.const 0) (local.get $result))
+
+          ;; if there was no errors we resolve and not reject
+          (call $Promise-resolve (local.get $scope) (local.get $promise) (local.get $arguments))
+          (drop)
+        )
+        (else
+          (array.set $JSArgs (local.get $arguments) (i32.const 0) (local.get $previous-result))
+
+          ;; there was no onrejected callback, so we pass further
+          (call $Promise-reject (local.get $scope) (local.get $promise) (local.get $arguments))
+          (drop)
+        )
+      )
+    catch $JSException
+      (call $create-arguments-1)
+      (local.set $arguments)
+
+      (call $Promise-reject (local.get $scope) (local.get $promise) (local.get $arguments))
+      (drop)
+    end
+  )
+
+  (func $add-to-promise-chain (param $target-promise (ref $Promise)) (param $promise (ref $Promise))
+    (local $promises (ref null $PromisesArray))
+    (local $len i32)
+    (local $i i32)
+    (local $new-promises (ref null $PromisesArray))
+
+    (local.set $promises (struct.get $Promise $chained-promises (local.get $target-promise)))
+    (local.set $len (array.len (local.get $promises)))
+    (local.set $i (i32.const 0))
+
+    (block $break (loop $find
+      (br_if $break (i32.ge_u (local.get $i) (local.get $len)))
+      
+      (array.get $PromisesArray (local.get $promises) (local.get $i))
+      (if (ref.test nullref)
+        (then
+          ;; we found a null value, let's insert here
+          (array.set $PromisesArray
+            (local.get $promises)
+            (local.get $i)
+            (local.get $promise))
+
+          (return)
+        ))
+      
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $find)
+    ))
+  
+    ;; we haven't found any free space, let's double the array and try again 
+    (local.set $new-promises
+      (array.new $PromisesArray (ref.null $Promise) (i32.mul (local.get $len) (i32.const 2))))
+
+    (array.copy
+      $PromisesArray             ;; dest type
+      $PromisesArray             ;; source type
+      (local.get $new-promises)  ;; dest array
+      (i32.const 0)              ;; dest offset
+      (local.get $promises)      ;; source array
+      (i32.const 0)              ;; source data offest
+      (local.get $len)           ;; source data length
+    )
+
+    ;; set new promieses on the $promise object
+    (struct.set $Promise $chained-promises (local.get $target-promise) (ref.cast (ref $PromisesArray) (local.get $new-promises)))
+
+    ;; try again
+    (call $add-to-promise-chain (local.get $target-promise) (local.get $promise))
+  )
+
+  (func $Promise-resolve
+    (type $JSFunc)
+    (param $scope (ref $Scope))
+    (param $this anyref)
+    (param $arguments (ref $JSArgs))
+    (result anyref)
+
+    (local $resolve-result anyref)
+    (local $promise (ref $Promise))
+    (local $current-promise (ref $Promise))
+    (local $promises (ref $PromisesArray))
+    (local $i i32)
+    (local $function (ref $Function))
+    (local $callback-arguments (ref $JSArgs))
+    (local $len i32)
+
+    (local.set $i (i32.const 0))
+
+    (ref.cast (ref $Promise) (local.get $this))
+    (local.set $promise)
+
+    (struct.get $Promise $chained-promises (local.get $promise))
+    (local.set $promises)
+
+    (if (i32.eqz (array.len (local.get $arguments)))
+      (then
+        ;; no arguments, so result is undefined
+        (local.set $resolve-result (ref.null any))
+      )
+      (else
+        (array.get $JSArgs (local.get $arguments) (i32.const 0))
+        (local.set $resolve-result)
+      )
+    )
+
+    ;; TODO: handle errors
+    (local.get $promise)
+    (local.get $resolve-result)
+    (struct.set $Promise $success-result)
+
+    (local.get $promise)
+    (i32.const 1)
+    (struct.set $Promise $resolved)
+
+    (local.set $len (array.len (local.get $promises)))
+    (block $break (loop $find
+      (br_if $break (i32.ge_u (local.get $i) (local.get $len)))
+
+      (if (i32.eqz (ref.test nullref (array.get $PromisesArray (local.get $promises) (local.get $i))))
+        (then
+          (array.get $PromisesArray (local.get $promises) (local.get $i))
+          (ref.cast (ref $Promise))
+          (local.set $promise)
+
+          (call $evaluate-resolved (local.get $scope) (local.get $resolve-result) (local.get $promise))
+        ))
+
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $find)
+    ))
+ 
+    ;; return undefined
+    (ref.null any)
+  )
+
+  (func $Promise-reject
+    (type $JSFunc)
+    (param $scope (ref $Scope))
+    (param $this anyref)
+    (param $arguments (ref $JSArgs))
+    (result anyref)
+
+    (local $reject-result anyref)
+    (local $promise (ref $Promise))
+    (local $current-promise (ref $Promise))
+    (local $promises (ref $PromisesArray))
+    (local $i i32)
+    (local $function (ref $Function))
+    (local $callback-arguments (ref $JSArgs))
+    (local $len i32)
+
+    (local.set $i (i32.const 0))
+
+    (ref.cast (ref $Promise) (local.get $this))
+    (local.set $promise)
+
+    (struct.get $Promise $chained-promises (local.get $promise))
+    (local.set $promises)
+
+    (if (i32.eqz (array.len (local.get $arguments)))
+      (then
+        ;; no arguments, so result is undefined
+        (local.set $reject-result (ref.null any))
+      )
+      (else
+        (array.get $JSArgs (local.get $arguments) (i32.const 0))
+        (local.set $reject-result)
+      )
+    )
+
+    (local.get $promise)
+    (local.get $reject-result)
+    (struct.set $Promise $error-result)
+
+    (local.get $promise)
+    (i32.const 1)
+    (struct.set $Promise $errored)
+
+    (local.set $len (array.len (local.get $promises)))
+    (block $break (loop $find
+      (br_if $break (i32.ge_u (local.get $i) (local.get $len)))
+
+      (if (i32.eqz (ref.test nullref (array.get $PromisesArray (local.get $promises) (local.get $i))))
+        (then
+          (array.get $PromisesArray (local.get $promises) (local.get $i))
+          (ref.cast (ref $Promise))
+          (local.set $promise)
+
+          (call $evaluate-rejected (local.get $scope) (local.get $reject-result) (local.get $promise))
+        ))
+      
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $find)
+    ))
+ 
+    ;; return undefined
+    (ref.null any)
+
+  )
+
+  (func $Promise-constructor
+    (type $JSFunc)
+    (param $scope (ref $Scope))
+    (param $this anyref)
+    (param $arguments (ref $JSArgs))
+    (result anyref)
+
+    (local $resolver (ref $Function))
+    (local $arg1 anyref)
+    (local $callback-arguments (ref $JSArgs))
+    (local $promise (ref $Promise))
+    (local $error anyref)
+
+    (local.set $promise (call $new-promise))
+
+    (array.len (local.get $arguments))
+    (i32.eqz)
+    (if (then
+      (call $new_static_string (i32.const {{ data(str="Promise resolver undefined is not a function") }}) (i32.const {{ data_length() }}))
+      (throw $JSException)
+    ))
+
+    (array.get $JSArgs (local.get $arguments) (i32.const 0))
+    (local.tee $arg1)
+    (if (ref.test (ref $Function))
+      (then
+        (call $new_function (ref.cast (ref $Scope) (global.get $scope)) (ref.func $Promise-resolve) (local.get $promise))
+        (call $new_function (ref.cast (ref $Scope) (global.get $scope)) (ref.func $Promise-reject) (local.get $promise))
+        (call $create-arguments-2)
+        (local.set $callback-arguments)
+
+        try
+          (ref.cast (ref $Function) (local.get $arg1))
+          (ref.null any) ;; this
+          (local.get $callback-arguments)
+          (call $call_function)
+          (drop)
+        catch $JSException
+          (local.tee $error)
+          (call $create-arguments-1)
+          (local.set $arguments)
+
+          (call $Promise-reject (local.get $scope) (local.get $promise) (local.get $arguments))
+          (drop)
+        end
+
+        (return (local.get $promise))
+      )
+      (else
+        ;; TODO: this need to create a dynamic string and convert the argument to string
+        (call $new_static_string (i32.const {{ data(str="Promise resolver is not a function") }}) (i32.const {{ data_length() }}))
+        (throw $JSException)
+      )
+    )
+
+    (return (ref.null any))
+  )
+
+  (func $create-arguments-1 (param $arg1 anyref) (result (ref $JSArgs))
+    (local $arguments (ref $JSArgs))
+    (array.new $JSArgs (ref.null any) (i32.const 1))
+    (local.set $arguments)
+
+    (array.set $JSArgs (local.get $arguments) (i32.const 0) (local.get $arg1))
+
+    (local.get $arguments)
+  )
+
+  (func $create-arguments-2 (param $arg1 anyref) (param $arg2 anyref) (result (ref $JSArgs))
+    (local $arguments (ref $JSArgs))
+    (array.new $JSArgs (ref.null any) (i32.const 2))
+    (local.set $arguments)
+
+    (array.set $JSArgs (local.get $arguments) (i32.const 0) (local.get $arg1))
+    (array.set $JSArgs (local.get $arguments) (i32.const 1) (local.get $arg2))
+
+    (local.get $arguments)
+  )
+
+  ;; this function returns the first argument if it's an object, otherwise it returns the
+  ;; second argument. it's used when deciding what to return from a new statement
+  (func $return_object_or (param $first anyref) (param $second anyref) (result anyref)
+    (if (i32.or 
+          (ref.test (ref $Object) (local.get $first))
+          ;; Promise is also an object
+          (ref.test (ref $Promise) (local.get $first)))
+      (then
+        (return (local.get $first))
+      )
+      (else
+        (return (local.get $second))
+      ))
+
+    (ref.null any)
+  )
 
   {{additional_functions}}
 
@@ -316,11 +932,13 @@
   (func $new_function
     (param $scope (ref $Scope))
     (param $function (ref $JSFunc))
+    (param $this anyref)
     (result (ref $Function))
 
     (struct.new $Function
       (local.get $scope)
       (local.get $function)
+      (local.get $this)
       (call $new_hashmap)
     )
   )
@@ -468,6 +1086,23 @@
     )
   )
 
+  (func $is_no_value_found (param $arg anyref) (result i32)
+    (if (ref.test nullref (local.get $arg))
+      (then
+        (return (i32.const 0))))
+
+    (if (ref.test i31ref (local.get $arg))
+      (then
+        (i32.const -1)
+        (i31.get_s (ref.cast i31ref (local.get $arg)))
+        (if (i32.eq)
+          (then
+            (return (i32.const 1))
+          ))))
+
+    (return (i32.const 0))
+  )
+
   (func $get_variable (param $scope (ref $Scope)) (param $name i32) (result anyref)
     (local $current_scope (ref null $Scope))
     (local $value anyref)
@@ -480,7 +1115,7 @@
           (local.get $name)
         )
       )
-      (if (ref.is_null (local.get $value))
+      (if (call $is_no_value_found (local.get $value))
         (then
           (local.set $current_scope (struct.get $Scope $parent (local.get $current_scope)))
           (if (ref.is_null (local.get $current_scope))
@@ -499,31 +1134,83 @@
     (throw $JSException (ref.i31 (i32.const 103)))
   )
 
+  ;; TODO: this should also handle prototypes
   (func $get_property (param $target anyref) (param $name i32) (result anyref)
+    (local $result anyref)
     (if (ref.test (ref $Object) (local.get $target))
       (then
         (call $hashmap_get
           (struct.get $Object $properties (ref.cast (ref $Object) (local.get $target)))
           (local.get $name)
         )
-        (return)
+        (local.set $result)
       )
-    )
-
-    ;; TODO: as long as objects like Function and String are just another objects
-    ;; we will have to reimplement a lot of stuff like this. It would be great
-    ;; to research parent and child types
-    (if (ref.test (ref $Function) (local.get $target))
-      (then
-        (call $hashmap_get
-          (struct.get $Function $properties (ref.cast (ref $Function) (local.get $target)))
-          (local.get $name)
+      (else
+        ;; TODO: as long as objects like Function and String are just another objects
+        ;; we will have to reimplement a lot of stuff like this. It would be great
+        ;; to research parent and child types
+        (if (ref.test (ref $Function) (local.get $target))
+          (then
+            (call $hashmap_get
+              (struct.get $Function $properties (ref.cast (ref $Function) (local.get $target)))
+              (local.get $name)
+            )
+            (local.set $result)
+          )
+          (else
+            (if (ref.test (ref $Promise) (local.get $target))
+              (then
+                (call $hashmap_get
+                  (struct.get $Promise $properties (ref.cast (ref $Promise) (local.get $target)))
+                  (local.get $name)
+                )
+                (local.tee $result)
+                (if (ref.test i31ref)
+                  (then
+                    (if (i32.eq 
+                          (i31.get_s (ref.cast i31ref (local.get $result)))
+                          (i32.const -1))
+                      (then
+                        ;; if the result is i31ref -1, it means nothing was found, so
+                        ;; we need to search the $prototype
+                        (ref.cast (ref $Promise) (local.get $target))
+                        (struct.get $Promise $prototype)
+                        (local.get $name)
+                        (call $get_property)
+                        (local.set $result)
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
         )
-        (return)
       )
     )
 
-    (throw $JSException (ref.i31 (i32.const 100)))
+    (if (ref.test i31ref (local.get $result))
+      (then
+        (if (i32.eq
+              (i31.get_s (ref.cast i31ref (local.get $result)))
+              (i32.const -1))
+          (then
+            (throw $JSException (ref.i31 (i32.const 100)))
+          )
+        )
+      )
+    )
+
+    (if (ref.test (ref $Function) (local.get $result))
+      (then
+        (ref.cast (ref $Function) (local.get $result))
+        (local.get $target)
+        (struct.set $Function $this)
+      )
+    )
+
+    (local.get $result)
+    (return)
   )
 
   (func $set_property (param $target anyref) (param $name i32) (param $value anyref)
@@ -542,6 +1229,17 @@
       (then
         (call $hashmap_set
           (struct.get $Function $properties (ref.cast (ref $Function) (local.get $target)))
+          (local.get $name)
+          (local.get $value)
+        )
+        (return)
+      )
+    )
+
+    (if (ref.test (ref $Promise) (local.get $target))
+      (then
+        (call $hashmap_set
+          (struct.get $Promise $properties (ref.cast (ref $Promise) (local.get $target)))
           (local.get $name)
           (local.get $value)
         )
@@ -710,7 +1408,10 @@
         )
       )
     )
-    (ref.null any)
+
+    ;; we need to somehow differentiate between value not being found and the found
+    ;; value being null
+    (ref.i31 (i32.const -1))
   )
 
   (func $hashmap_get_i32 (param $map (ref $HashMapI32)) (param $key i32) (result i32)
@@ -745,13 +1446,28 @@
   (func $call_function (param $func anyref) (param $this anyref) (param $arguments (ref $JSArgs)) (result anyref)
     (local $function (ref $Function))
     (local $js_func (ref $JSFunc))
+    (local $current_this anyref)
 
     (local.set $function (ref.cast (ref $Function) (local.get $func)))
     (local.set $js_func (struct.get $Function $func (local.get $function)))
 
+    (local.get $this)
+    (ref.test nullref)
+    (if
+      (then
+        ;; if this is not passed let's use whatever is in the Function
+        (struct.get $Function $this (local.get $function))
+        (local.set $current_this)
+      )
+      (else
+        (local.get $this)
+        (local.set $current_this)
+      )
+    )
+
     (call_ref $JSFunc
       (struct.get $Function $scope (local.get $function))
-      (local.get $this)
+      (local.get $current_this)
       (local.get $arguments)
       (local.get $js_func)
     )
@@ -1030,7 +1746,9 @@
         (return (call $new_static_string (i32.const {{ data(str="number") }}) (i32.const {{ data_length() }}))))
     )
 
-    (if (ref.test (ref $Object) (local.get $arg))
+    (if (i32.or 
+          (ref.test (ref $Object) (local.get $arg))
+          (ref.test (ref $Promise) (local.get $arg)))
       (then
         (return (call $new_static_string (i32.const {{ data(str="object") }}) (i32.const {{ data_length() }}))))
     )
@@ -1305,6 +2023,12 @@
   
   (i32.add (local.get $start) (local.get $length))
 )
+
+  (func $log_string (param $str (ref $StaticString))
+    (local.get $str)
+    (call $create-arguments-1)
+    (call $log)
+  )
 
   (func $log (param $arguments (ref $JSArgs))
     (local $i i32)                    ;; loop counter
@@ -1776,7 +2500,6 @@
             )
           )
           ;; TODO: handle async variant
-
           (throw $JSException (ref.i31 (i32.const 20002)))
       ))
 
@@ -1929,12 +2652,34 @@
     (;));)
   )
 
+  (elem declare func $Promise-constructor)
+  (elem declare func $Promise-then)
+  (elem declare func $Promise-catch)
+  (elem declare func $Promise-reject)
+  (elem declare func $Promise-resolve)
+  (elem declare func $Promise-finally)
+
+  (func $install-globals
+    (local $scope (ref $Scope))
+    (local $promise-constructor (ref $Function))
+
+    (local.tee $scope (call $new_scope (ref.null $Scope)))
+    (global.set $scope)
+
+    (global.set $promise-prototype (call $create-promise-prototype))
+
+    ;; Promise
+    (call $new_function (local.get $scope) (ref.func $Promise-constructor) (ref.null any))
+    (local.set $promise-constructor)
+    (call $set_variable (local.get $scope) (i32.const {{ data(str="Promise") }}) (local.get $promise-constructor))
+  )
+
   (func $outer_init (result i32)
-    (local $call_arguments (ref $JSArgs))
     (local $error anyref)
     (local $temp_arg anyref)
     (local $length i32)
     try
+      (call $install-globals)
       (call $init)
 
       (call $store-pollables (global.get $free_memory_offset))
@@ -1946,14 +2691,11 @@
       (return (i32.const 0))
     catch $JSException
       (local.set $error)
-      (array.new $JSArgs (ref.null any) (i32.const 2))
-      (local.set $call_arguments)
-      (call $new_static_string (i32.const {{ data(str="error encountered") }}) (i32.const {{ data_length() }}))
-      (local.set $temp_arg)
-      (array.set $JSArgs (local.get $call_arguments) (i32.const 0) (local.get $temp_arg))
-      (array.set $JSArgs (local.get $call_arguments) (i32.const 1) (local.get $error))
 
-      (call $log (local.get $call_arguments))
+      (call $new_static_string (i32.const {{ data(str="error encountered") }}) (i32.const {{ data_length() }}))
+      (local.get $error)
+      (call $create-arguments-2)
+      (call $log)
       (return (i32.const 1))
     end
 

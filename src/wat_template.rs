@@ -36,8 +36,8 @@ fn data(
                     Ok(v) => {
                         // if the value does not exist insert any i32, we will fix it on the second
                         // run
+                        last_data_entry_length.store(v.len() as i32, Ordering::Relaxed);
                         let value = interner.lock().unwrap().entry(v).or_insert(0).to_string();
-                        last_data_entry_length.store(value.len() as i32, Ordering::Relaxed);
                         Ok(to_value(value).unwrap())
                     }
                     Err(_) => Err("str needs to be a string".into()),
@@ -53,7 +53,8 @@ fn data(
 fn data_length(last_data_entry_length: Arc<AtomicI32>) -> impl Function {
     Box::new(
         move |_args: &HashMap<String, Value>| -> tera::Result<Value> {
-            Ok(to_value(last_data_entry_length.load(Ordering::Relaxed).to_string()).unwrap())
+            let length = last_data_entry_length.load(Ordering::Relaxed).to_string();
+            Ok(to_value(length).unwrap())
         },
     )
 }

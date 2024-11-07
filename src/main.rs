@@ -230,7 +230,11 @@ impl WasmTranslator {
 
         W::call(
             "$new_function".to_string(),
-            vec![W::local_get("$scope"), W::ref_func(function_name)],
+            vec![
+                W::local_get("$scope"),
+                W::ref_func(function_name),
+                W::ref_null("any"),
+            ],
         )
     }
 
@@ -774,11 +778,8 @@ impl WasmTranslator {
             W::call("$new_object", vec![]),
             W::local_set(&new_instance),
             self.translate_call(new.call(), W::local_get(&new_instance), true),
-            W::drop(),
-            // TODO: we return the created instance, but it's not always the case
-            // in JS. If the returned value is an object, we should return the returned
-            // value, so we need to add an if with a `ref.test` here
             W::local_get(&new_instance),
+            W::call("$return_object_or", vec![]),
         ])
     }
 
@@ -1240,9 +1241,11 @@ fn main() -> anyhow::Result<()> {
     let init = translator.module.get_function_mut("init").unwrap();
     init.add_local_exact("$scope", "(ref $Scope)");
 
-    init.body.push_front(W::local_set("$scope"));
-    init.body
-        .push_front(W::call("$new_scope", vec![W::ref_null("$Scope")]));
+    init.body.push_front(W::list(vec![
+        W::global_get("$scope"),
+        W::instruction("ref.cast (ref $Scope)", vec![]),
+        W::local_set("$scope"),
+    ]));
     // init.body.push_back(W::list(vec![
     //     W::i32_const(0),
     //     W::call("$proc_exit", vec![]),
