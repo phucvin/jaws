@@ -92,7 +92,11 @@ const importObject = {
   console: { log: (value) => console.log(`WebAssembly log: ${value}`) },
   wasi_snapshot_preview1: {
     proc_exit(code) {
-      console.log("exit code: ", code);
+      if (typeof process !== undefined) {
+        process.exit(code);
+      } else {
+        console.log("exit code: ", code);
+      }
     },
     fd_write(fd, iovsPtr, iovsLength, bytesWrittenPtr) {
       const iovs = new Uint32Array(
@@ -146,6 +150,10 @@ const importObject = {
   // // Call the start function
   // console.time('start');
   let result = exports["wasi:cli/run@0.2.1#run"]();
+
+  if (typeof process !== undefined) {
+    process.exit(result);
+  }
   //  console.log("result: ", result);
   // console.timeEnd('start');
 

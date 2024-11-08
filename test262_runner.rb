@@ -4,6 +4,7 @@ require 'json'
 require 'pathname'
 require 'thread'
 require 'yaml'
+require 'timeout'
 
 # Check required environment variables
 TEST262_DIR = ENV['TEST262_DIR']
@@ -58,6 +59,7 @@ def parse_test_metadata(content)
 end
 
 def run_test(test_path, harness_content)
+  puts "Starting #{test_path}"
   # Create temporary file with harness and test content
   test_content = File.read(test_path)
   metadata = parse_test_metadata(test_content)
@@ -65,34 +67,40 @@ def run_test(test_path, harness_content)
   
   File.write(temp_file, harness_content + "\n" + test_content)
   
-  # Run the test and capture both output and exit code
-  output = `#{JS_INTERPRETER} #{temp_file} 2>&1`
-  exit_code = $?.exitstatus
+  begin
+    # Run the test and capture both output and exit code
+    output = Timeout::timeout(5) {
+      `#{JS_INTERPRETER} #{temp_file} 2>&1`
+    }
+    exit_code = $?.exitstatus
 
-  # Check if this is a negative test that should fail parsing
-  expected_parse_error = metadata.dig('negative', 'phase') == 'parse' &&
-                        metadata.dig('negative', 'type') == 'SyntaxError'
+    # Check if this is a negative test that should fail parsing
+    expected_parse_error = metadata.dig('negative', 'phase') == 'parse' &&
+                          metadata.dig('negative', 'type') == 'SyntaxError'
 
-  # Handle parsing errors
-  if output.include?("JS2WASM parsing error")
-    begin
-      File.delete(temp_file) if File.exist?(temp_file)
-    rescue => e
-      # Ignore deletion errors
+    # Handle parsing errors
+    if output.include?("JS2WASM parsing error")
+      begin
+        File.delete(temp_file) if File.exist?(temp_file)
+      rescue => e
+        # Ignore deletion errors
+      end
+      # Return success (0) if this was expected to fail parsing
+      return [expected_parse_error ? 0 : 100, nil, output]
     end
-    # Return success (0) if this was expected to fail parsing
-    return [expected_parse_error ? 0 : 100, nil, output]
-  end
-  
-  # Check for panic and extract location
-  if output =~ /thread 'main' panicked at src\/main.rs:(\d+):(\d+):/
-    panic_location = "main.rs:#{$1}:#{$2}"
-    begin
-      File.delete(temp_file) if File.exist?(temp_file)
-    rescue => e
-      # Ignore deletion errors
+    
+    # Check for panic and extract location
+    if output =~ /thread 'main' panicked at src\/main.rs:(\d+):(\d+):/
+      panic_location = "main.rs:#{$1}:#{$2}"
+      begin
+        File.delete(temp_file) if File.exist?(temp_file)
+      rescue => e
+        # Ignore deletion errors
+      end
+      return [exit_code, panic_location, output]
     end
-    return [exit_code, panic_location, output]
+  rescue Timeout::Error
+    return [101, nil, ""]
   end
   
   begin
