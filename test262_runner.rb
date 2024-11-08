@@ -74,6 +74,8 @@ def run_test(test_path, harness_content)
     }
     exit_code = $?.exitstatus
 
+    puts output
+
     # Check if this is a negative test that should fail parsing
     expected_parse_error = metadata.dig('negative', 'phase') == 'parse' &&
                           metadata.dig('negative', 'type') == 'SyntaxError'
@@ -160,7 +162,7 @@ test_files = if ARGV[0]
   # If path is relative to TEST262_DIR/test, make it absolute
   test_path = ARGV[0]
   unless Pathname.new(test_path).absolute?
-    test_path = File.join(test_dir, test_path)
+    test_path = File.join(TEST262_DIR, test_path)
   end
   
   if File.exist?(test_path)

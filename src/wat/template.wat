@@ -1008,6 +1008,67 @@
     )
   )
 
+  ;; it's similar to set_variable as it writes to a variable on the scope, but
+  ;; it checks if a variable is available in the scope first
+  (func $assign_variable (param $scope (ref $Scope)) (param $name i32) (param $value anyref)
+    (;(local $existing_type i32);)
+    (;;)
+    (;;; this needs to also check parents;)
+    (;(call $hashmap_get_i32;)
+    (;  (struct.get $Scope $var_types (local.get $scope));)
+    (;  (local.get $name);)
+    (;);)
+    (;(local.set $existing_type);)
+    (;;)
+    (;(if (i32.eq (local.get $existing_type) (i32.const 0));)
+    (;  (then;)
+    (;    ;; 0 means it's a const, we have to throw an error;)
+    (;    ;; TODO: throw proper eception type;)
+    (;    (throw $JSException (ref.i31 (i32.const 12)));)
+    (;  );)
+    (;);)
+    (;;)
+    (;(call $hashmap_set;)
+    (;  (struct.get $Scope $variables (local.get $scope));)
+    (;  (local.get $name);)
+    (;  (local.get $value);)
+    (;);)
+
+    (local $current_scope (ref null $Scope))
+    (local $found-value anyref)
+
+    (local.set $current_scope (local.get $scope))
+    (loop $search_loop
+      (local.set $found-value
+        (call $hashmap_get
+          (struct.get $Scope $variables (local.get $current_scope))
+          (local.get $name)
+        )
+      )
+      (if (call $is_no_value_found (local.get $found-value))
+        (then
+          (local.set $current_scope (struct.get $Scope $parent (local.get $current_scope)))
+          (if (ref.is_null (local.get $current_scope))
+            (then
+              (throw $JSException (ref.i31 (local.get $name)))
+            )
+          )
+ 
+          (br $search_loop)
+        )
+        (else
+          ;; we found the variable declared on the $current_scope, so
+          ;; set the variable on the $current_scope
+          (call $set_variable (ref.cast (ref $Scope) (local.get $current_scope)) (local.get $name) (local.get $value))
+        )
+      )
+    )
+
+    ;; TODO: if there's no variable found JS still lets you assign, but
+    ;; it saves it on the global scope
+    (call $set_variable (ref.cast (ref $Scope) (global.get $scope)) (local.get $name) (local.get $value))
+  )
+
   ;; TODO: for let and const we need to check if the values already exist
   (func $set_variable (param $scope (ref $Scope)) (param $name i32) (param $value anyref)
     (local $existing_type i32)

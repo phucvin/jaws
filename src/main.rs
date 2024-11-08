@@ -12,10 +12,15 @@ use boa_ast::{
         },
         Await, Call, Expression, Identifier, New, Parenthesized,
     },
-    function::{ArrowFunction, AsyncFunction, FormalParameterList, Function, FunctionBody},
-    statement::{Block, Catch, Finally, If, Return, Statement, Throw, Try, WhileLoop},
+    function::{
+        ArrowFunction, AsyncFunction, FormalParameter, FormalParameterList, Function, FunctionBody,
+    },
+    statement::{
+        Block, Case, Catch, DoWhileLoop, ErrorHandler, Finally, ForInLoop, ForLoop, ForOfLoop, If,
+        Return, Statement, Switch, Throw, Try, WhileLoop, With,
+    },
     visitor::{VisitWith, Visitor},
-    StatementListItem,
+    Script, StatementList, StatementListItem,
 };
 use boa_interner::{Interner, JStrRef, Sym, ToInternedString};
 use boa_parser::{Parser, Source};
@@ -239,11 +244,6 @@ impl WasmTranslator {
     }
 
     fn translate_function(&mut self, fun: &Function) -> Box<W> {
-        // println!(
-        //     "translate function: {}",
-        //     fun.to_interned_string(&self.interner)
-        // );
-
         self.translate_function_generic(fun.name(), fun.parameters(), fun.body())
     }
 
@@ -615,17 +615,215 @@ impl WasmTranslator {
     }
 
     fn translate_await_expression(&mut self, await_expression: &Await) -> Box<W> {
-        println!("AWAIT: {await_expression:#?}");
+        // println!("AWAIT: {await_expression:#?}");
         todo!();
         W::empty()
     }
 
-    fn translate_async_function(&mut self, async_function: &AsyncFunction) -> Box<W> {
-        self.translate_function_generic(
-            async_function.name(),
-            async_function.parameters(),
-            async_function.body(),
+    fn convert_return_to_resolve(&mut self, statement: &Statement) -> Statement {
+        match statement {
+            Statement::Return(ret) => {
+                // Create resolve() call with the return value
+                let resolve_call = Expression::Call(Call::new(
+                    Expression::Identifier(Identifier::new(
+                        self.interner.get_or_intern(JStrRef::Utf8("resolve")),
+                    )),
+                    if let Some(target) = ret.target() {
+                        Box::new([target.clone()])
+                    } else {
+                        Box::new([])
+                    },
+                ));
+
+                // Create a block with resolve() + return
+                Statement::Return(Return::new(Some(resolve_call)))
+            }
+            _ => statement.clone(),
+        }
+    }
+
+    fn transform_return_in_statement_list(&mut self, statements: StatementList) -> StatementList {
+        StatementList::new(
+            statements
+                .statements()
+                .iter()
+                .map(|s| match s {
+                    StatementListItem::Statement(statement) => {
+                        StatementListItem::Statement(self.transform_return_in_statement(statement))
+                    }
+                    sli => sli.clone(),
+                })
+                .collect::<Vec<StatementListItem>>(),
+            true,
         )
+    }
+
+    fn transform_return_in_statement(&mut self, stmt: &Statement) -> Statement {
+        match stmt {
+            Statement::Return(_) => self.convert_return_to_resolve(stmt),
+            Statement::Block(block) => Statement::Block(Block::from(
+                self.transform_return_in_statement_list(block.statement_list().clone()),
+            )),
+            Statement::If(if_stmt) => {
+                let cond = if_stmt.cond();
+                let body = self.transform_return_in_statement(if_stmt.body());
+                let else_node = if_stmt
+                    .else_node()
+                    .map(|stmt| self.transform_return_in_statement(stmt));
+                Statement::If(If::new(cond.clone(), body, else_node))
+            }
+            Statement::DoWhileLoop(lp) => {
+                let body = self.transform_return_in_statement(lp.body());
+                Statement::DoWhileLoop(DoWhileLoop::new(body, lp.cond().clone()))
+            }
+            Statement::WhileLoop(lp) => {
+                let body = self.transform_return_in_statement(lp.body());
+                Statement::WhileLoop(WhileLoop::new(lp.condition().clone(), body))
+            }
+            Statement::ForLoop(lp) => {
+                let body = self.transform_return_in_statement(lp.body());
+                Statement::ForLoop(ForLoop::new(
+                    lp.init().cloned(),
+                    lp.condition().cloned(),
+                    lp.final_expr().cloned(),
+                    body,
+                ))
+            }
+            Statement::ForInLoop(lp) => {
+                let body = self.transform_return_in_statement(lp.body());
+                Statement::ForInLoop(ForInLoop::new(
+                    lp.initializer().clone(),
+                    lp.target().clone(),
+                    body,
+                ))
+            }
+            Statement::ForOfLoop(lp) => {
+                let body = self.transform_return_in_statement(lp.body());
+                Statement::ForOfLoop(ForOfLoop::new(
+                    lp.initializer().clone(),
+                    lp.iterable().clone(),
+                    body,
+                    lp.r#await(),
+                ))
+            }
+            Statement::Switch(sw) => {
+                let cases = sw
+                    .cases()
+                    .iter()
+                    .map(|case| {
+                        let body = self.transform_return_in_statement_list(case.body().clone());
+                        if case.is_default() {
+                            Case::default(body)
+                        } else {
+                            Case::new(case.condition().unwrap().clone(), body)
+                        }
+                    })
+                    .collect();
+                Statement::Switch(Switch::new(sw.val().clone(), cases))
+            }
+            Statement::Try(tr) => {
+                let block = Block::from(
+                    self.transform_return_in_statement_list(tr.block().statement_list().clone()),
+                );
+                let handler = match (tr.catch(), tr.finally()) {
+                    (Some(c), None) => ErrorHandler::Catch(c.clone()),
+                    (None, Some(f)) => ErrorHandler::Finally(f.clone()),
+                    (Some(c), Some(f)) => ErrorHandler::Full(c.clone(), f.clone()),
+                    _ => unreachable!(),
+                };
+                Statement::Try(Try::new(block, handler))
+            }
+            Statement::With(with) => {
+                let statement = self.transform_return_in_statement(with.statement());
+                Statement::With(With::new(with.expression().clone(), statement))
+            }
+            _ => stmt.clone(),
+        }
+    }
+
+    fn transform_function_body(&mut self, body: &Script) -> Script {
+        let mut new_statements = Vec::new();
+
+        for statement in body.statements().statements() {
+            match statement {
+                StatementListItem::Statement(stmt) => {
+                    new_statements.push(StatementListItem::Statement(
+                        self.transform_return_in_statement(stmt),
+                    ));
+                }
+                StatementListItem::Declaration(decl) => {
+                    new_statements.push(StatementListItem::Declaration(decl.clone()));
+                }
+            }
+        }
+
+        // Add final resolve(), just in case there was no return earlier
+        new_statements.push(StatementListItem::Statement(Statement::Expression(
+            Expression::Call(Call::new(
+                Expression::Identifier(Identifier::new(
+                    self.interner.get_or_intern(JStrRef::Utf8("resolve")),
+                )),
+                Box::new([]),
+            )),
+        )));
+
+        Script::new(StatementList::new(new_statements, true))
+    }
+
+    fn translate_async_function(&mut self, async_function: &AsyncFunction) -> Box<W> {
+        use boa_ast::declaration::Variable;
+        use boa_ast::expression::Identifier;
+
+        // Create the promise callback function
+        let callback_params = FormalParameterList::from_parameters(vec![
+            FormalParameter::new(
+                Variable::from_identifier(
+                    Identifier::new(self.interner.get_or_intern(JStrRef::Utf8("resolve"))),
+                    None,
+                ),
+                false,
+            ),
+            FormalParameter::new(
+                Variable::from_identifier(
+                    Identifier::new(self.interner.get_or_intern(JStrRef::Utf8("reject"))),
+                    None,
+                ),
+                false,
+            ),
+        ]);
+
+        // Transform the original function body
+        let transformed_body = self.transform_function_body(async_function.body());
+
+        // Create the callback function
+        let callback_function = Function::new(None, callback_params, transformed_body);
+
+        // Create the Promise constructor call
+        let promise_function = Expression::Function(callback_function);
+        let promise_new = Expression::New(
+            Call::new(
+                Expression::Identifier(Identifier::new(
+                    self.interner.get_or_intern(JStrRef::Utf8("Promise")),
+                )),
+                Box::new([promise_function]),
+            )
+            .into(),
+        );
+
+        // Create the outer function that returns the promise
+        let outer_function = Function::new(
+            async_function.name(),
+            async_function.parameters().clone(),
+            Script::new(StatementList::new(
+                vec![StatementListItem::Statement(Statement::Return(
+                    Return::new(Some(promise_new)),
+                ))],
+                true,
+            )),
+        );
+
+        // println!("{}", outer_function.to_interned_string(&self.interner));
+        self.translate_function(&outer_function)
     }
 
     fn translate_array_literal(
@@ -832,7 +1030,7 @@ impl WasmTranslator {
                             rhs,
                             W::local_set(&rhs_var),
                             W::call(
-                                "$set_variable".to_string(),
+                                "$assign_variable".to_string(),
                                 vec![
                                     W::local_get("$scope".to_string()),
                                     W::i32_const(offset),
@@ -973,8 +1171,23 @@ impl WasmTranslator {
             }
             Declaration::Lexical(v) => self.translate_lexical(v),
             Declaration::Generator(_generator) => todo!(),
-            Declaration::AsyncFunction(async_function) => {
-                self.translate_async_function(async_function)
+            Declaration::AsyncFunction(decl) => {
+                let declaration = self.translate_async_function(decl);
+                if let Some(name) = decl.name() {
+                    let offset = self.add_identifier(&name);
+                    W::call(
+                        "$declare_variable".to_string(),
+                        vec![
+                            W::local_get("$scope"),
+                            W::i32_const(offset),
+                            declaration,
+                            W::i32_const(VarType::Var.to_i32()),
+                        ],
+                    )
+                } else {
+                    // TODO: if it's empty and not called right away I guess we can just ignore it?
+                    declaration
+                }
             }
             Declaration::AsyncGenerator(_async_generator) => todo!(),
             Declaration::Class(_class) => todo!(),
@@ -1143,10 +1356,10 @@ impl<'a> Visitor<'a> for WasmTranslator {
     type BreakTy = ();
 
     fn visit_var_declaration(&mut self, node: &'a VarDeclaration) -> ControlFlow<Self::BreakTy> {
-        println!(
-            "visit_var_declaration: {}",
-            node.to_interned_string(&self.interner)
-        );
+        // println!(
+        //     "visit_var_declaration: {}",
+        //     node.to_interned_string(&self.interner)
+        // );
         let instruction = self.translate_var(node);
         self.current_function().add_instruction(instruction);
         ControlFlow::Continue(())

@@ -386,12 +386,12 @@ impl WatFunction {
         }
     }
 
-    pub fn add_param(&mut self, name: String, type_: String) {
-        self.params.push((name, type_));
+    pub fn add_param(&mut self, name: impl Into<String>, type_: impl Into<String>) {
+        self.params.push((name.into(), type_.into()));
     }
 
-    pub fn add_result(&mut self, type_: String) {
-        self.results.push(type_);
+    pub fn add_result(&mut self, type_: impl Into<String>) {
+        self.results.push(type_.into());
     }
 
     pub fn add_local_exact(&mut self, name: impl Into<String>, r#type: impl Into<String>) {
