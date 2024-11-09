@@ -1,5 +1,3 @@
-const tagToImport = new WebAssembly.Tag({ parameters: ["i32", "i64"] });
-
 let instance,
   pollables = [],
   pollableIndex = 0;
@@ -49,10 +47,6 @@ function findPollable(id) {
 }
 
 const importObject = {
-  m: {
-    t: tagToImport,
-  },
-
   "wasi:io/poll@0.2.1": {
     poll: async function (ptr, length, returnPtr) {
       // this is a simplification, ie. arrays do not necessarily take 4 bytes of space
@@ -132,8 +126,6 @@ const importObject = {
 };
 
 (async function () {
-  // Load and instantiate the WebAssembly module
-  // let response = await fetch('tests/ref-cast.wasm');
   let bytes;
   if (typeof process !== "undefined") {
     const fs = require("node:fs");
@@ -146,19 +138,10 @@ const importObject = {
   let compiled = await WebAssembly.compile(bytes, { builtins: ["js-string"] });
   instance = await WebAssembly.instantiate(compiled, importObject);
   const exports = instance.exports;
-  //
-  // // Call the start function
-  // console.time('start');
+
   let result = exports["wasi:cli/run@0.2.1#run"]();
 
   if (typeof process !== undefined) {
     process.exit(result);
   }
-  //  console.log("result: ", result);
-  // console.timeEnd('start');
-
-  // }).catch(error => {
-  //   debugger
-  //     log('Error: ' + error);
-  // });
 })();
