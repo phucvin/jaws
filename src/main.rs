@@ -518,31 +518,13 @@ impl WasmTranslator {
                         //     self.current_function().add_local("$expr_result", "anyref");
                         // let expr_result_instr = self.translate_expression(expression, true);
                         //
-                        // // TODO:
-                        // //
-                        // // we need to:
-                        // // 1. create a function to convert various types to string
-                        // // 2. create a way to put those strings into an array
-                        // // 3.
-                        // if let Some(assign_instruction) = assign {
-                        //     let temp = self.current_function().add_local("$temp", "anyref");
-                        //     W::list(vec![
-                        //         expr_result_instr,
-                        //         W::local_set(&expr_result_var),
-                        //         assign_instruction,
-                        //         W::local_set(&temp),
-                        //         target,
-                        //         W::i32_const(offset),
-                        //         W::local_get(&temp),
-                        //         W::call("$set_property", vec![]),
-                        //     ])
-                        // } else {
-                        //     W::list(vec![
-                        //         target,
-                        //         W::i32_const(offset),
-                        //         W::call("$get_property", vec![]),
-                        //     ])
-                        // }
+                        //  TODO:
+                        //
+                        //  we need to:
+                        //  1. create a function to convert various types to string
+                        //  2. create a way to put those strings into an array (on an object
+                        // itself, most probably)
+                        //  3. use the mappings to translate string access into i32 access
                     }
                 }
             }
@@ -1417,35 +1399,6 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow!("JS2WASM parsing error: {e}"))?;
 
     let mut translator = WasmTranslator::new(interner);
-    // for type_of_value in [
-    //     "error encountered",
-    //     "undefined",
-    //     "object",
-    //     "boolean",
-    //     "number",
-    //     "bigint",
-    //     "string",
-    //     "symbol",
-    //     "function",
-    //     "null",
-    //     "true",
-    //     "false",
-    //     "object",
-    //     "then",
-    //     "catch",
-    //     "finally",
-    //     "toString",
-    //     " ",
-    //     "\\n",
-    // ]
-    // .iter()
-    // {
-    //     let sym = translator
-    //         .interner
-    //         .get_or_intern(JStrRef::Utf8(type_of_value));
-    //     translator.add_symbol(sym);
-    // }
-    //
     // println!("{ast:#?}");
     ast.visit_with(&mut translator);
     // exit $init function
@@ -1459,10 +1412,6 @@ fn main() -> anyhow::Result<()> {
         W::instruction("ref.cast (ref $Scope)", vec![]),
         W::local_set("$scope"),
     ]));
-    // init.body.push_back(W::list(vec![
-    //     W::i32_const(0),
-    //     W::call("$proc_exit", vec![]),
-    // ]));
 
     // Generate the full WAT module
     let module = translator.module.to_string();
