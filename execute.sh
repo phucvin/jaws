@@ -3,15 +3,10 @@ set -o pipefail
 
 # Parse options
 CARGO_RUN=0
-USE_NODE=0
 while [[ $# -gt 0 ]]; do
   case $1 in
   --cargo-run)
     CARGO_RUN=1
-    shift
-    ;;
-  --node)
-    USE_NODE=1
     shift
     ;;
   *)
@@ -47,12 +42,7 @@ generate_wasm() {
 }
 
 run_wasm() {
-
-  if [ $USE_NODE -eq 1 ]; then
-    node run.js $JAWS_DIR/wasm/generated.wasm
-  else
-    wasmedge run --enable-gc --enable-exception-handling $JAWS_DIR/wasm/generated.wasm | tail -n +2
-  fi
+  node run.js $JAWS_DIR/wasm/generated.wasm
 }
 
 # Convert WAT to WASM

@@ -62,10 +62,12 @@ Unless you want to contribute you probably shouldn't, but after cloning the repo
 you can use an `execute.sh` script like:
 
 ```
-./execute.sh --cargo-run --node path/to/script.js
+./execute.sh --cargo-run path/to/script.js
 ```
 
 It will generate a WAT file, compile it to a binary and then run using Node.js.
+
+It requires Rust's `cargo`, relatively new version of `wasm-tools` and Node.js v23.0.0 or newer. Passing `--cargo-run` will make the script use `cargo run` command to first compile and then run the project, otherwise it will try to run the release build (so you have to run `cargo build --release` prior to running `./execute.sh` without `--cargo-run` option)
 
 ### What's next?
 
