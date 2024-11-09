@@ -81,7 +81,7 @@ def run_test(test_path, harness_content)
                           metadata.dig('negative', 'type') == 'SyntaxError'
 
     # Handle parsing errors
-    if output.include?("JS2WASM parsing error")
+    if output.include?("JAWS parsing error")
       begin
         File.delete(temp_file) if File.exist?(temp_file)
       rescue => e
@@ -129,8 +129,8 @@ class Stats
 
   def add_result(result, panic_location, output)
     @mutex.synchronize do
-      # Skip tests with JS2WASM parsing errors
-      return if output.include?("JS2WASM parsing error")
+      # Skip tests with JAWS parsing errors
+      return if output.include?("JAWS parsing error")
       
       if panic_location
         @panic_locations[panic_location] += 1

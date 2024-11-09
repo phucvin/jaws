@@ -20,17 +20,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Set JS2WASM_DIR only if JS2WASM_DIR is not already set
-: ${JS2WASM_DIR:=/Users/drogus/code/js2wasm}
+# Set JAWS_DIR only if JAWS_DIR is not already set
+: ${JAWS_DIR:=.}
 
 # Determine how to run the compiler
 if [ $CARGO_RUN -eq 1 ]; then
   COMPILER="cargo run"
 else
-  if [ -n "$JS2WASM_BINARY" ]; then
-    COMPILER="$JS2WASM_BINARY"
+  if [ -n "$JAWS_BINARY" ]; then
+    COMPILER="$JAWS_BINARY"
   else
-    COMPILER="$JS2WASM_DIR/target/release/js2wasm"
+    COMPILER="$JAWS_DIR/target/release/jaws"
   fi
 fi
 
@@ -40,18 +40,18 @@ if ! cat $1 | $COMPILER; then
 fi
 
 generate_wasm() {
-  wasm-tools parse $JS2WASM_DIR/wat/generated.wat -o $JS2WASM_DIR/wasm/generated.wasm
+  wasm-tools parse $JAWS_DIR/wat/generated.wat -o $JAWS_DIR/wasm/generated.wasm
   # && \
-  #   wasm-tools component embed --all-features $JS2WASM_DIR/wit --world js2wasm $JS2WASM_DIR/wat/generated.wat -t -o wasm/generated.core.wasm && \
-  #   wasm-tools component new $JS2WASM_DIR/wasm/generated.core.wasm -o $JS2WASM_DIR/wasm/generated.component.wasm
+  #   wasm-tools component embed --all-features $JAWS_DIR/wit --world jaws $JAWS_DIR/wat/generated.wat -t -o wasm/generated.core.wasm && \
+  #   wasm-tools component new $JAWS_DIR/wasm/generated.core.wasm -o $JAWS_DIR/wasm/generated.component.wasm
 }
 
 run_wasm() {
 
   if [ $USE_NODE -eq 1 ]; then
-    node run.js $JS2WASM_DIR/wasm/generated.wasm
+    node run.js $JAWS_DIR/wasm/generated.wasm
   else
-    wasmedge run --enable-gc --enable-exception-handling $JS2WASM_DIR/wasm/generated.wasm | tail -n +2
+    wasmedge run --enable-gc --enable-exception-handling $JAWS_DIR/wasm/generated.wasm | tail -n +2
   fi
 }
 

@@ -1396,7 +1396,7 @@ fn main() -> anyhow::Result<()> {
     let mut parser = Parser::new(Source::from_bytes(&full));
     let ast = parser
         .parse_script(&mut interner)
-        .map_err(|e| anyhow!("JS2WASM parsing error: {e}"))?;
+        .map_err(|e| anyhow!("JAWS parsing error: {e}"))?;
 
     let mut translator = WasmTranslator::new(interner);
     // println!("{ast:#?}");
@@ -1423,8 +1423,8 @@ fn main() -> anyhow::Result<()> {
         &mut translator,
     );
 
-    let js2wasm_dir = std::env::var("JS2WASM_DIR").unwrap_or(".".into());
-    let mut f = File::create(Path::new(&js2wasm_dir).join("wat/generated.wat")).unwrap();
+    let jaws_dir = std::env::var("JAWS_DIR").unwrap_or(".".into());
+    let mut f = File::create(Path::new(&jaws_dir).join("wat/generated.wat")).unwrap();
     f.write_all(module.as_bytes()).unwrap();
 
     // println!("WAT modules generated successfully!");
