@@ -7,9 +7,9 @@ features and builtin types are missing or incomplete. That said, my goal is to e
 
 ### Why Jaws?
 
-I started this project while working on a stress testing tool called [Crows](https://github.com/drogus/crows) that runs WebAssembly scenarios. At the moment it only supports code compiled from Rust to WASM. As much as I love writing Rust, I also know it's not a widely popular language and besides small testing scripts are often easier done in scripting languages. The problem is, running scripting languages on top of WASM is not ideal at the moment. You have to either include an interpreter, which automatically makes the binary at least a few MBs in size, or use a variation of the language you're targetting (like TinyGo instead of Go, or AssemblyScript instead of TypeScript/JavaScript).
+I started this project while working on a stress testing tool called [Crows](https://github.com/drogus/crows) that runs WebAssembly scenarios. At the moment it only supports code compiled from Rust to WASM. As much as I love writing Rust, I also know it's not a widely popular language and besides, small tests are often easier to write in interpreted languages. The problem is, running scripting languages on top of WASM is not ideal at the moment. You have to either include an interpreter, which automatically makes the binary at least a few MBs in size and the memory usage even bigger, or use a variation of the language you're targetting (like TinyGo instead of Go, or AssemblyScript instead of TypeScript/JavaScript).
 
-I believe that with modern WASM proposals it is possible to implement 100% of JavaScript features without the need to use an interpreter.
+I believe that with modern WASM proposals it is possible to implement 100% of JavaScript features without the need to use a compiled interpreter, as WASM runtimes are already interpreters.
 
 If you want to see it happen, please consider [sponsoring my work](https://github.com/sponsors/drogus)
 ### What works
