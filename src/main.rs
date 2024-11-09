@@ -1390,10 +1390,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut interner = Interner::default();
 
-    let js_include = include_str!("js/prepend.js");
-    let full = format!("{js_include}\n{js_code}");
-
-    let mut parser = Parser::new(Source::from_bytes(&full));
+    let mut parser = Parser::new(Source::from_bytes(&js_code));
     let ast = parser
         .parse_script(&mut interner)
         .map_err(|e| anyhow!("JAWS parsing error: {e}"))?;
