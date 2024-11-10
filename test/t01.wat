@@ -1554,6 +1554,7 @@
     )
   )
 
+  ;; Bookmark
   (func $add (param $arg1 anyref) (param $arg2 anyref) (result anyref)
     (local $num1 (ref $Number))
     (local $num2 (ref $Number))
@@ -2698,6 +2699,7 @@
 (ref.cast (ref $Scope))
 (local.set $scope)
 
+  ;; Bookmark
   (call $new_number (f64.const 299))
 (local.set $var-1)
 (local.get $scope)
@@ -2706,6 +2708,7 @@
 (i32.const 1)
 (call $declare_variable)
 
+  ;; Bookmark
   (call $new_number (f64.const 388))
 (local.set $var-2)
 (local.get $scope)
