@@ -42,7 +42,7 @@ generate_wasm() {
 }
 
 run_wasm() {
-  node run.js $JAWS_DIR/wasm/generated.wasm
+  node --experimental-wasm-gc run.js $JAWS_DIR/wasm/generated.wasm
 }
 
 # Convert WAT to WASM
