@@ -22,3 +22,5 @@ $ time ./execute.sh test/fib.js
 
 real    0m24.469s
 ```
+
+cp wat/generated.wat test/fib.wat
