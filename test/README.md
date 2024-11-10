@@ -15,3 +15,10 @@ cargo install --locked wasm-tools
 > 678
 
 cp wat/generated.wat test/t01.wat
+
+```
+$ time ./execute.sh test/fib.js
+102334155
+
+real    0m24.469s
+```
