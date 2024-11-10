@@ -28,26 +28,26 @@
   ;; i31ref 2 - null
   ;; null     - undefined
 
-  (data $d376 (i32.const 376) "null")
-(data $d504 (i32.const 504) "true")
-(data $d444 (i32.const 444) "error encountered")
-(data $d440 (i32.const 440) "then")
-(data $d396 (i32.const 396) "Promise resolver undefined is not a function")
-(data $d300 (i32.const 300) "a")
+  (data $d368 (i32.const 368) "\n")
+(data $d424 (i32.const 424) " ")
+(data $d436 (i32.const 436) "string")
+(data $d380 (i32.const 380) "Promise resolver is not a function")
+(data $d464 (i32.const 464) "Promise")
 (data $d304 (i32.const 304) "b")
-(data $d492 (i32.const 492) "boolean")
-(data $d476 (i32.const 476) "Promise")
-(data $d484 (i32.const 484) "catch")
-(data $d500 (i32.const 500) " ")
-(data $d464 (i32.const 464) "undefined")
-(data $d360 (i32.const 360) "string")
-(data $d388 (i32.const 388) "number")
-(data $d508 (i32.const 508) "\n")
-(data $d308 (i32.const 308) "finally")
-(data $d368 (i32.const 368) "function")
-(data $d352 (i32.const 352) "object")
-(data $d316 (i32.const 316) "Promise resolver is not a function")
-(data $d380 (i32.const 380) "false")
+(data $d444 (i32.const 444) "then")
+(data $d416 (i32.const 416) "object")
+(data $d448 (i32.const 448) "finally")
+(data $d300 (i32.const 300) "a")
+(data $d360 (i32.const 360) "number")
+(data $d460 (i32.const 460) "true")
+(data $d428 (i32.const 428) "catch")
+(data $d308 (i32.const 308) "Promise resolver undefined is not a function")
+(data $d492 (i32.const 492) "undefined")
+(data $d504 (i32.const 504) "boolean")
+(data $d472 (i32.const 472) "error encountered")
+(data $d456 (i32.const 456) "null")
+(data $d372 (i32.const 372) "function")
+(data $d352 (i32.const 352) "false")
 
 
   ;; Memory management functions required by the Component Model
@@ -210,17 +210,17 @@
     (local.set $object (call $new_object))
 
     (local.get $object)
-    (i32.const 440)
+    (i32.const 444)
     (call $new_function (ref.cast (ref $Scope) (global.get $scope)) (ref.func $Promise-then) (ref.null any))
     (call $set_property)
 
     (local.get $object)
-    (i32.const 484)
+    (i32.const 428)
     (call $new_function (ref.cast (ref $Scope) (global.get $scope)) (ref.func $Promise-catch) (ref.null any))
     (call $set_property)
 
     (local.get $object)
-    (i32.const 308)
+    (i32.const 448)
     (call $new_function (ref.cast (ref $Scope) (global.get $scope)) (ref.func $Promise-finally) (ref.null any))
     (call $set_property)
 
@@ -726,7 +726,7 @@
     (array.len (local.get $arguments))
     (i32.eqz)
     (if (then
-      (call $new_static_string (i32.const 396) (i32.const 44))
+      (call $new_static_string (i32.const 308) (i32.const 44))
       (throw $JSException)
     ))
 
@@ -758,7 +758,7 @@
       )
       (else
         ;; TODO: this need to create a dynamic string and convert the argument to string
-        (call $new_static_string (i32.const 316) (i32.const 34))
+        (call $new_static_string (i32.const 380) (i32.const 34))
         (throw $JSException)
       )
     )
@@ -1803,7 +1803,7 @@
   (func $type_of (param $arg anyref) (result (ref $StaticString))
     (if (ref.test nullref (local.get $arg))
       (then
-        (return (call $new_static_string (i32.const 464) (i32.const 9)))
+        (return (call $new_static_string (i32.const 492) (i32.const 9)))
       )
     )
 
@@ -1813,10 +1813,10 @@
               (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg))) (i32.const 0))
               (i32.eq (i31.get_s (ref.cast (ref null i31) (local.get $arg))) (i32.const 1)))
           (then
-            (return (call $new_static_string (i32.const 492) (i32.const 7)))
+            (return (call $new_static_string (i32.const 504) (i32.const 7)))
           )
           (else
-            (return (call $new_static_string (i32.const 464) (i32.const 9)))
+            (return (call $new_static_string (i32.const 492) (i32.const 9)))
           )
         )
       )
@@ -1824,27 +1824,27 @@
 
     (if (ref.test (ref $Number) (local.get $arg))
       (then
-        (return (call $new_static_string (i32.const 388) (i32.const 6))))
+        (return (call $new_static_string (i32.const 360) (i32.const 6))))
     )
 
     (if (i32.or 
           (ref.test (ref $Object) (local.get $arg))
           (ref.test (ref $Promise) (local.get $arg)))
       (then
-        (return (call $new_static_string (i32.const 352) (i32.const 6))))
+        (return (call $new_static_string (i32.const 416) (i32.const 6))))
     )
 
     (if (ref.test (ref $StaticString) (local.get $arg))
       (then
-        (return (call $new_static_string (i32.const 360) (i32.const 6))))
+        (return (call $new_static_string (i32.const 436) (i32.const 6))))
     )
 
     (if (ref.test (ref $Function) (local.get $arg))
       (then
-        (return (call $new_static_string (i32.const 368) (i32.const 8))))
+        (return (call $new_static_string (i32.const 372) (i32.const 8))))
     )
 
-    (return (call $new_static_string (i32.const 464) (i32.const 9)))
+    (return (call $new_static_string (i32.const 492) (i32.const 9)))
   )
 
   (func $less_than (param $arg1 anyref) (param $arg2 anyref) (result i31ref)
@@ -2169,7 +2169,7 @@
             ;; Store iovector data
             (i32.store 
               (local.get $iovectors_offset)
-              (i32.const 464)
+              (i32.const 492)
             )
             (i32.store 
               (i32.add (local.get $iovectors_offset) (i32.const 4))
@@ -2200,7 +2200,7 @@
                 ;; Store iovector data
                 (i32.store
                   (local.get $iovectors_offset)
-                  (i32.const 376)
+                  (i32.const 456)
                 )
                 (i32.store 
                   (i32.add (local.get $iovectors_offset) (i32.const 4))
@@ -2223,7 +2223,7 @@
                 ;; Store iovector data
                 (i32.store
                   (local.get $iovectors_offset)
-                  (i32.const 504)
+                  (i32.const 460)
                 )
                 (i32.store 
                   (i32.add (local.get $iovectors_offset) (i32.const 4))
@@ -2246,7 +2246,7 @@
                 ;; Store iovector data
                 (i32.store
                   (local.get $iovectors_offset)
-                  (i32.const 380)
+                  (i32.const 352)
                 )
                 (i32.store 
                   (i32.add (local.get $iovectors_offset) (i32.const 4))
@@ -2417,7 +2417,7 @@
         )
 
         ;; after each argument, but the last, we put in a space
-        (i32.store (local.get $iovectors_offset) (i32.const 500))
+        (i32.store (local.get $iovectors_offset) (i32.const 424))
         (i32.store 
           (i32.add (local.get $iovectors_offset) (i32.const 4))
           (i32.const 1)
@@ -2432,7 +2432,7 @@
     )
 
     ;; put newline at the end
-    (i32.store (local.get $iovectors_offset) (i32.const 508))
+    (i32.store (local.get $iovectors_offset) (i32.const 368))
     (i32.store 
       (i32.add (local.get $iovectors_offset) (i32.const 4))
       (i32.const 2)
@@ -2690,10 +2690,10 @@
   (elem declare func $init)
   (func $init
   (local $var-2 anyref)
+  (local $temp_arg-1 anyref)
   (local $var-1 anyref)
   (local $call_arguments-1 (ref $JSArgs))
   (local $scope (ref $Scope))
-  (local $temp_arg-1 anyref)
   (global.get $scope)
 (ref.cast (ref $Scope))
 (local.set $scope)
@@ -2791,7 +2791,7 @@
     ;; Promise
     (call $new_function (local.get $scope) (ref.func $Promise-constructor) (ref.null any))
     (local.set $promise-constructor)
-    (call $set_variable (local.get $scope) (i32.const 476) (local.get $promise-constructor))
+    (call $set_variable (local.get $scope) (i32.const 464) (local.get $promise-constructor))
   )
 
   (func $outer_init (result i32)
@@ -2812,7 +2812,7 @@
     catch $JSException
       (local.set $error)
 
-      (call $new_static_string (i32.const 444) (i32.const 17))
+      (call $new_static_string (i32.const 472) (i32.const 17))
       (local.get $error)
       (call $create-arguments-2)
       (call $log)
